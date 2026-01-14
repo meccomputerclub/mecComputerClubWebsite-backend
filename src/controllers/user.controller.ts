@@ -141,8 +141,18 @@ export const login = async (req: Request, res: Response) => {
     const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
 
     const token = generateJWT({ id: user._id, email: user.email, role: user.role });
-    res.cookie("auth_token", token, { httpOnly: true, maxAge: sevenDaysInMs });
-    res.cookie("role", user.role, { httpOnly: true, maxAge: sevenDaysInMs });
+    res.cookie("auth_token", token, {
+      httpOnly: true,
+      maxAge: sevenDaysInMs,
+      secure: true,
+      sameSite: "none",
+    });
+    res.cookie("role", user.role, {
+      httpOnly: true,
+      maxAge: sevenDaysInMs,
+      secure: true,
+      sameSite: "none",
+    });
 
     res.status(200).json({
       success: true,

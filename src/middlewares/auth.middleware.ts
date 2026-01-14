@@ -8,6 +8,8 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret";
 
 export const authMiddleware = (roles?: string[]) => {
   return async (req: Request, res: Response, next: NextFunction) => {
+    const token1 = req.cookies.auth_token;
+    console.log("Token from cookie-parser:", token1);
     const authHeader = req.headers.cookie?.split("auth_token=")[1];
     console.log("auth_token: ", authHeader);
     if (!authHeader) return res.status(401).json({ message: "Unauthorized" });
@@ -25,8 +27,18 @@ export const authMiddleware = (roles?: string[]) => {
         const token = jwt.sign({ id: payload.id, role: user.role }, JWT_SECRET, {
           expiresIn: "7d",
         });
-        res.cookie("auth_token", token, { maxAge: 7 * 24 * 60 * 60 * 1000, httpOnly: true });
-        res.cookie("role", user.role, { maxAge: 7 * 24 * 60 * 60 * 1000, httpOnly: true });
+        res.cookie("auth_token", token, {
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+          httpOnly: true,
+          secure: true,
+          sameSite: "none",
+        });
+        res.cookie("role", user.role, {
+          maxAge: 7 * 24 * 60 * 60 * 1000,
+          httpOnly: true,
+          secure: true,
+          sameSite: "none",
+        });
       } else {
         (req as any).user = { id: payload.id, role: payload.role };
       }
