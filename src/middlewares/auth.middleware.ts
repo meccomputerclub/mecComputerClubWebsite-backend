@@ -9,9 +9,10 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret";
 export const authMiddleware = (roles?: string[]) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     const authHeader = req.headers.cookie?.split("auth_token=")[1];
+    console.log("auth_token: ", authHeader);
     if (!authHeader) return res.status(401).json({ message: "Unauthorized" });
     const token = authHeader.split(" ")[0].replace(/;/, "");
-    // console.log("token: ", token);
+    console.log("token: ", token);
     try {
       const payload = jwt.verify(token, JWT_SECRET) as any;
       //crosscheck with database for role
