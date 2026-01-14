@@ -54,9 +54,13 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/forms", formRoutes);
 app.use("/api/events", eventRoutes);
 app.use("/api/page", pageRoutes);
+
+app.get("/", (req, res) => {
+  res.send("Welcome to the API! Visit /api/docs for documentation.");
+});
+app.get("/health", (req, res) => res.json({ ok: true }));
 app.use(globalErrorHandler);
 
 // health
-app.get("/health", (req, res) => res.json({ ok: true }));
 
 export default app;
