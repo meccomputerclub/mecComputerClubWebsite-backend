@@ -20,7 +20,13 @@ const app = express();
 app.use("/public", express.static(path.join(__dirname, "..", "public")));
 const frontendUrl = process.env.FRONTEND_URL;
 
-const allowedOrigins = ["http://localhost:3000", "http://127.0.0.1:3000", frontendUrl];
+const allowedOrigins = [
+  "https://meccomputerclub.vercel.app",
+  "https://www.meccomputerclub.org",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  frontendUrl,
+];
 
 const corsOptions: CorsOptions = {
   origin: (requestOrigin: string | undefined, callback: any) => {
