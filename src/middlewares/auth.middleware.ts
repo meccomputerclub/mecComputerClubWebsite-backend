@@ -9,7 +9,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "secret";
 export const authMiddleware = (roles?: string[]) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     const token = req.cookies.auth_token;
-    // console.log("token: ", token);
+    console.log("token: ", token);
     if (!token) {
       return res.status(401).json({ message: "No token provided" });
     }
