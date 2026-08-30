@@ -3,7 +3,7 @@ import { v2 as cloudinary } from "cloudinary";
 import { CloudinaryStorage } from "multer-storage-cloudinary";
 import path from "path";
 
-// Configure Cloudinary with your credentials (use .env variables!)
+// Configure Cloudinary with credentials from env variables
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -25,17 +25,48 @@ export const createUploader = (folder: string) => {
       let desiredName = path.parse(file.originalname).name;
 
       if (req.body?.data) {
-        const data = JSON.parse(req.body.data);
-        desiredName = data.fullName || desiredName;
+        try {
+          const data = JSON.parse(req.body.data);
+          desiredName = data.fullName || desiredName;
+        } catch {
+          // fallback to original name
+        }
       }
 
       return {
         folder: `uploads/${folder}`,
         public_id: `${sanitizeName(desiredName)}-${Date.now()}`,
-        allowed_formats: ["jpg", "png", "jpeg", "webp"],
+        allowed_formats: ["jpg", "png", "jpeg", "webp", "gif", "svg"],
       };
     },
   });
 
-  return multer({ storage });
+  return multer({
+    storage,
+    limits: {
+      fileSize: 15 * 1024 * 1024, // 15MB limit
+    },
+  });
+};
+
+export const createFileUploader = (folder: string) => {
+  const storage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: async (req, file) => {
+      let desiredName = path.parse(file.originalname).name;
+
+      return {
+        folder: `uploads/${folder}`,
+        resource_type: "auto",
+        public_id: `${sanitizeName(desiredName)}-${Date.now()}`,
+      };
+    },
+  });
+
+  return multer({
+    storage,
+    limits: {
+      fileSize: 25 * 1024 * 1024, // 25MB limit
+    },
+  });
 };

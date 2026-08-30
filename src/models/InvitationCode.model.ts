@@ -1,17 +1,23 @@
 import { Schema, model, Document } from "mongoose";
 
-export type InvitationStatus = "consumable" | "consumed" | "expired" | "cancelled";
+export type InvitationStatus = "consumable" | "consumed" | "expired" | "cancelled" | "discontinued";
+export type InvitationCodeType = "single_use" | "permanent";
 
 export interface IInvitationCode extends Document {
-  code: string; // 6-char unique code
-  email: string; // Target user email
+  code: string; // Unique code (e.g. 6-char OTP or custom permanent code)
+  codeType: InvitationCodeType; // "single_use" vs "permanent" (reusable)
+  email?: string; // Target user email (required for single_use, optional for permanent)
+  label?: string; // Description or campaign name (e.g. "2026 Batch Recruitment")
 
   // Optional fields
   formId?: string; // Reference to membership form (submitted data)
-  role?: "guest" | "member" | "moderator" | "admin" | "alumni";
+  role?: "member" | "alumni" | "advisor" | "moderator" | "admin" | "guest";
 
   status: InvitationStatus;
-  expiresAt: Date; // Expiration timestamp
+  usageCount: number; // Number of registrations made with this code
+  maxUses?: number; // 0 or undefined for unlimited
+
+  expiresAt?: Date; // Expiration timestamp (optional / far future for permanent)
 
   createdAt: Date;
   updatedAt: Date;
@@ -23,14 +29,30 @@ const InvitationCodeSchema = new Schema<IInvitationCode>(
       type: String,
       required: true,
       unique: true,
-      length: 6,
+      trim: true,
+      uppercase: true,
+      index: true,
+    },
+
+    codeType: {
+      type: String,
+      enum: ["single_use", "permanent"],
+      default: "single_use",
       index: true,
     },
 
     email: {
       type: String,
-      required: [true, "Email is required"],
-      unique: [true, "Email is already in use"],
+      trim: true,
+      lowercase: true,
+      index: true,
+      default: "",
+    },
+
+    label: {
+      type: String,
+      trim: true,
+      default: "",
     },
 
     formId: {
@@ -39,25 +61,38 @@ const InvitationCodeSchema = new Schema<IInvitationCode>(
 
     role: {
       type: String,
-      enum: ["guest", "member", "moderator", "admin", "alumni"],
+      enum: ["member", "alumni", "advisor", "moderator", "admin", "guest"],
       default: "member",
     },
 
     status: {
       type: String,
-      enum: ["consumable", "consumed", "expired", "cancelled"],
+      enum: ["consumable", "consumed", "expired", "cancelled", "discontinued"],
       default: "consumable",
+      index: true,
+    },
+
+    usageCount: {
+      type: Number,
+      default: 0,
+    },
+
+    maxUses: {
+      type: Number,
+      default: 0,
     },
 
     expiresAt: {
       type: Date,
-      required: true,
+      default: () => new Date(Date.now() + 365 * 100 * 24 * 60 * 60 * 1000), // Default 100 years for permanent
     },
   },
   { timestamps: true }
 );
 
-// Automatically expire codes in MongoDB (optional)
-InvitationCodeSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+const InvitationCodeModel = model<IInvitationCode>("InvitationCode", InvitationCodeSchema);
 
-export default model<IInvitationCode>("InvitationCode", InvitationCodeSchema);
+// Drop old unique email_1 index if it exists in MongoDB so re-issuance works seamlessly
+InvitationCodeModel.collection.dropIndex("email_1").catch(() => {});
+
+export default InvitationCodeModel;

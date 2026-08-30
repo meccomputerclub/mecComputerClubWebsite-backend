@@ -4,12 +4,13 @@ import mongoose, { Schema, Document } from "mongoose";
 export interface IMedia extends Document {
   title: string;
   description?: string;
-  url: string; // The hosted URL of the media (e.g., Cloudinary or S3)
+  url: string;
   mediaType: "image" | "video" | "document" | "other";
-  fileSize: number; // Size in bytes
-  uploader: mongoose.Types.ObjectId; // Reference to the User who uploaded it
-  relatedEvent?: mongoose.Types.ObjectId; // Optional link to an Event
+  fileSize: number;
+  uploader: mongoose.Types.ObjectId;
+  relatedEvent?: mongoose.Types.ObjectId;
   tags: string[];
+  imagePublicId?: string; // Cloudinary public_id — used for deletion
 }
 
 // 2. Define the Mongoose Schema
@@ -49,8 +50,12 @@ const MediaSchema: Schema = new Schema(
       required: false,
     },
     tags: {
-      type: [String], // Array of strings for easy searching/filtering
+      type: [String],
       default: [],
+    },
+    imagePublicId: {
+      type: String,
+      default: null,
     },
   },
   {

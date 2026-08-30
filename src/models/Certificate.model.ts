@@ -1,56 +1,36 @@
 import mongoose, { Schema, Document } from "mongoose";
 
-// 1. Define the Interface (for TypeScript)
 export interface ICertificate extends Document {
   name: string;
   description?: string;
-  recipient: mongoose.Types.ObjectId; // Reference to the User who earned it
-  associatedEvent?: mongoose.Types.ObjectId; // Optional link to the Event/Activity
+  recipient: mongoose.Types.ObjectId;
+  associatedEvent?: mongoose.Types.ObjectId;
   issueDate: Date;
-  certificateId: string; // Unique ID for verification (e.g., hash or sequential ID)
-  digitalUrl: string; // Link to the publicly verifiable PDF or image
+  certificateId: string;
+  digitalUrl: string;
+  type: "participation" | "winner" | "completion" | "achievement" | "other";
+  position?: string; // for winner certificates: "1st Place", etc.
+  issuedBy?: mongoose.Types.ObjectId; // admin who issued it
 }
 
-// 2. Define the Mongoose Schema
 const CertificateSchema: Schema = new Schema(
   {
-    name: {
+    name: { type: String, required: true, trim: true },
+    description: { type: String, trim: true },
+    recipient: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    associatedEvent: { type: Schema.Types.ObjectId, ref: "Event" },
+    issueDate: { type: Date, required: true },
+    certificateId: { type: String, required: true, unique: true },
+    digitalUrl: { type: String, required: true },
+    type: {
       type: String,
-      required: [true, "Certificate name is required"],
-      trim: true,
+      enum: ["participation", "winner", "completion", "achievement", "other"],
+      default: "participation",
     },
-    description: {
-      type: String,
-      trim: true,
-    },
-    recipient: {
-      type: Schema.Types.ObjectId,
-      ref: "User",
-      required: [true, "Certificate recipient is required"],
-    },
-    associatedEvent: {
-      type: Schema.Types.ObjectId,
-      ref: "Event",
-      required: false,
-    },
-    issueDate: {
-      type: Date,
-      required: [true, "Issue date is required"],
-    },
-    certificateId: {
-      type: String,
-      required: [true, "Verification ID is required"],
-      unique: true, // Ensures each certificate is uniquely verifiable
-    },
-    digitalUrl: {
-      type: String,
-      required: [true, "Digital certificate URL is required"],
-    },
+    position: { type: String, trim: true },
+    issuedBy: { type: Schema.Types.ObjectId, ref: "User" },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-// 3. Export the Model
 export const Certificate = mongoose.model<ICertificate>("Certificate", CertificateSchema);

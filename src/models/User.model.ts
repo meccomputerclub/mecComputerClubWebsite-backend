@@ -28,14 +28,22 @@ export interface IUser extends Document {
   bio?: string;
   imageUrl?: string;
   imagePublicId?: string;
+  coverUrl?: string;
+  coverPublicId?: string;
 
   socialLinks?: {
     facebook?: string;
     github?: string;
     linkedin?: string;
+    codeforces?: string;
+    codechef?: string;
+    discord?: string;
   };
 
-  role: "guest" | "member" | "moderator" | "admin" | "alumni";
+  role: "guest" | "member" | "moderator" | "admin" | "alumni" | "executive";
+  clubRole?: "member" | "executive" | "alumni" | "advisor";
+  customRole?: string;
+  designation?: string;
   applicationStatus: "pending" | "approved" | "rejected";
   profileStatus?: "incomplete" | "active" | "deleted" | "banned";
 
@@ -89,16 +97,33 @@ const userSchema: Schema<IUser> = new Schema(
     contactNumber: { type: String, required: true },
     address: String,
     bio: String,
-    imageUrl: { type: String, default: null, required: true },
+    imageUrl: { type: String, default: "" },
     imagePublicId: String,
+    coverUrl: { type: String, default: null },
+    coverPublicId: String,
 
-    socialLinks: { facebook: String, github: String, linkedin: String },
+    socialLinks: {
+      facebook: String,
+      github: String,
+      linkedin: String,
+      codeforces: String,
+      codechef: String,
+      discord: String,
+    },
 
     role: {
       type: String,
-      enum: ["guest", "member", "moderator", "admin", "alumni"],
+      enum: ["guest", "member", "moderator", "admin", "alumni", "executive"],
       default: "guest",
     },
+    clubRole: {
+      type: String,
+      enum: ["member", "executive", "alumni", "advisor"],
+      default: "member",
+      index: true,
+    },
+    customRole: { type: String, trim: true, default: "" },
+    designation: { type: String, trim: true, default: "" },
     applicationStatus: {
       type: String,
       enum: ["pending", "approved", "rejected"],
@@ -109,6 +134,7 @@ const userSchema: Schema<IUser> = new Schema(
       type: String,
       enum: ["incomplete", "active", "deleted", "banned"],
       default: "incomplete",
+      index: true,
     },
 
     approvedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },

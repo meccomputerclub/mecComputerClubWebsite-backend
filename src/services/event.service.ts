@@ -7,8 +7,9 @@ export const createEvent = async (data: Partial<IEvent>): Promise<IEvent> => {
 };
 
 export const getAllEvents = async (filter: FilterQuery<IEvent> = {}) => {
-  // We use populate to replace IDs with actual document data from other collections
-  return await Event.find(filter).populate("attendees", "name email").sort({ date: 1 });
+  return await Event.find(filter)
+    .populate("attendees", "fullName email")
+    .sort({ date: 1 });
 };
 
 export const getEventById = async (id: string) => {

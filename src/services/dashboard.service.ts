@@ -105,16 +105,100 @@ export const getAdminDashboardStats = async (): Promise<DashboardStats> => {
   }
 };
 
-export const getMembersDataService = async () => {
-  try {
-    //fetch all members with _id, name, email, role, profileStatus, eventsAttended, certificates, projectsContributed
-    const members = await User.find({})
-      .select(
-        "_id fullName imageUrl email role applicationStatus profileStatus eventsAttended certificates projectsContributed"
-      )
-      .lean();
+export interface GetMembersParams {
+  tab?: "pending" | "all";
+  filter?: string;
+  search?: string;
+  page?: number;
+  limit?: number;
+}
 
-    // Map to a new array and attach activityCounts (use any for the plain objects from .lean())
+export const getMembersDataService = async (params: GetMembersParams = {}) => {
+  try {
+    const {
+      tab = "pending",
+      filter = "all",
+      search = "",
+      page = 1,
+      limit = 10,
+    } = params;
+
+    const query: Record<string, any> = {};
+
+    // 1. Tab & Filter logic based on clubRole & application/profile statuses
+    if (tab === "pending") {
+      if (filter === "rejected") {
+        query.applicationStatus = "rejected";
+      } else if (filter === "all_applications") {
+        query.applicationStatus = { $in: ["pending", "rejected"] };
+      } else {
+        // default for pending tab
+        query.applicationStatus = "pending";
+      }
+    } else {
+      // tab === "all"
+      if (filter === "banned") {
+        query.profileStatus = "banned";
+      } else if (filter === "incomplete") {
+        query.profileStatus = "incomplete";
+        query.applicationStatus = { $ne: "pending" };
+      } else if (filter === "all" || !filter) {
+        query.applicationStatus = { $ne: "pending" };
+      } else {
+        // filter by clubRole: "member" | "executive" | "alumni" | "advisor"
+        query.applicationStatus = { $ne: "pending" };
+        query.clubRole = filter;
+      }
+    }
+
+    // 2. Search logic (fullName, studentId, email)
+    if (search && search.trim()) {
+      const searchRegex = new RegExp(search.trim(), "i");
+      query.$or = [
+        { fullName: searchRegex },
+        { studentId: searchRegex },
+        { email: searchRegex },
+      ];
+    }
+
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, Number(limit) || 10));
+    const skip = (pageNum - 1) * limitNum;
+
+    const [members, total, countsData] = await Promise.all([
+      User.find(query)
+        .select(
+          "_id fullName imageUrl email role clubRole customRole designation applicationStatus profileStatus studentId department session batch contactNumber address bio socialLinks isGraduated passingYear eventsAttended certificates projectsContributed createdAt approvedAt approvedBy rejectionReason"
+        )
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      User.countDocuments(query),
+      Promise.all([
+        User.countDocuments({ applicationStatus: "pending" }),
+        User.countDocuments({ applicationStatus: { $ne: "pending" } }),
+        User.countDocuments({ applicationStatus: "rejected" }),
+        User.countDocuments({ applicationStatus: { $ne: "pending" }, clubRole: "member" }),
+        User.countDocuments({ applicationStatus: { $ne: "pending" }, clubRole: "executive" }),
+        User.countDocuments({ applicationStatus: { $ne: "pending" }, clubRole: "alumni" }),
+        User.countDocuments({ applicationStatus: { $ne: "pending" }, clubRole: "advisor" }),
+        User.countDocuments({ profileStatus: "banned" }),
+      ]),
+    ]);
+
+    const [
+      pendingCount,
+      allCount,
+      rejectedCount,
+      membersCount,
+      executiveCount,
+      alumniCount,
+      advisorCount,
+      bannedCount,
+    ] = countsData;
+
+    // Map to a new array and attach activityCounts
     const membersWithCounts = (members as any[]).map((member) => {
       const { eventsAttended, certificates, projectsContributed, ...rest } = member;
       const activityCounts =
@@ -127,31 +211,67 @@ export const getMembersDataService = async () => {
         activityCounts,
       };
     });
-    // const members = await User.find({ role: { $nin: ["alumni", "guest"] } }); // Exclude alumni and guests
-    return membersWithCounts;
-    // const members = await User.find({ role: { $nin: ["alumni", "guest"] } }); // Exclude alumni and guests
-    // return members;
+
+    return {
+      members: membersWithCounts,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum) || 1,
+      },
+      counts: {
+        pending: pendingCount,
+        all: allCount,
+        rejected: rejectedCount,
+        member: membersCount,
+        executive: executiveCount,
+        alumni: alumniCount,
+        advisor: advisorCount,
+        banned: bannedCount,
+      },
+    };
   } catch (error) {
     console.error("Error fetching members data:", error);
     throw new Error("Could not retrieve members data.");
   }
 };
 
+export const getApplicationByIdService = async (userId: string) => {
+  try {
+    const user = await User.findById(userId)
+      .select("-password -verificationCode -verificationToken -passwordResetToken -passwordResetCode")
+      .populate("approvedBy", "fullName email imageUrl")
+      .lean();
+
+    if (!user) {
+      throw new Error("Applicant not found");
+    }
+
+    return user;
+  } catch (error: any) {
+    console.error("Error fetching applicant details:", error);
+    throw new Error(error?.message || "Could not retrieve applicant details.");
+  }
+};
+
 export const approveOrRejectUser = async (
   adminId: string,
   userId: string,
-  approved: boolean,
+  status: string,
   reason?: string
 ) => {
   const user = await User.findById(userId);
   if (!user) throw new Error("User not found");
+
+  const approved = status === "approved";
 
   if (approved) {
     user.applicationStatus = "approved";
     user.approvedBy = adminId as any;
     user.approvedAt = new Date();
     user.rejectionReason = undefined;
-    // if approved and graduated, you may set role=member or alumni
+    // if approved and graduated, set role=alumni, otherwise member
     if (user.isGraduated) user.role = "alumni";
     else if (user.role === "guest") user.role = "member";
     await user.save();

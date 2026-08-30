@@ -5,6 +5,7 @@ import {
   getMemberDashboardData,
   getAdminDashboardStats,
   getMembersDataService,
+  getApplicationByIdService,
   approveOrRejectUser,
 } from "../services/dashboard.service";
 import UserModel from "../models/User.model";
@@ -51,16 +52,22 @@ export const getAdminDashboard = async (req: Request, res: Response, next: NextF
 
 export const getMembersData = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const stats = await getMembersDataService();
+    const { tab, filter, search, page, limit } = req.query;
+    const data = await getMembersDataService({
+      tab: tab as any,
+      filter: filter as string,
+      search: search as string,
+      page: page ? Number(page) : undefined,
+      limit: limit ? Number(limit) : undefined,
+    });
 
     return res.status(200).json({
       success: true,
-      data: stats,
-      message: "Admin dashboard stats fetched successfully.",
+      data,
+      message: "Members data fetched successfully.",
     });
   } catch (error) {
-    // In a real app, you might log the error here
-    next(error); // Pass error to Express error handler
+    next(error);
   }
 };
 
@@ -108,3 +115,19 @@ export const updateApplicationStatus = async (req: Request, res: Response, next:
     next(error);
   }
 };
+
+export const getApplicationDetails = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    const applicant = await getApplicationByIdService(id);
+    return res.status(200).json({
+      success: true,
+      data: applicant,
+      message: "Applicant details retrieved successfully.",
+    });
+  } catch (error) {
+    console.error("Error while fetching applicant details:", error);
+    next(error);
+  }
+};
+

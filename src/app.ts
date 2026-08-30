@@ -8,6 +8,21 @@ import eventRoutes from "./routes/event.routes";
 import dashboardRoutes from "./routes/dashboard.routes";
 import formRoutes from "./routes/form.routes";
 import pageRoutes from "./routes/page.routes";
+import contactMessageRoutes from "./routes/contactMessage.routes";
+import siteSettingRoutes from "./routes/siteSetting.routes";
+import certificateRoutes from "./routes/certificate.routes";
+import blogRoutes from "./routes/blog.routes";
+import sponsorRoutes from "./routes/sponsor.routes";
+import projectRoutes from "./routes/project.routes";
+import customPageRoutes from "./routes/customPage.routes";
+import designationRoutes from "./routes/designation.routes";
+
+// Ensure all models are registered with Mongoose before any route handler runs
+import "./models/Media.model";
+import "./models/Certificate.model";
+import "./models/Sponsor.model";
+import "./models/Project.model";
+import "./models/Blog.model";
 import cors, { CorsOptions } from "cors";
 import globalErrorHandler from "./middlewares/errorMiddleware";
 import swaggerUi from "swagger-ui-express";
@@ -24,7 +39,9 @@ const allowedOrigins = [
   "https://meccomputerclub.vercel.app",
   "https://www.meccomputerclub.org",
   "http://localhost:3000",
+  "http://localhost:3001",
   "http://127.0.0.1:3000",
+  "http://127.0.0.1:3001",
   frontendUrl,
 ];
 
@@ -61,6 +78,14 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/forms", formRoutes);
 app.use("/api/events", eventRoutes);
 app.use("/api/page", pageRoutes);
+app.use("/api/contact-messages", contactMessageRoutes);
+app.use("/api/site-settings", siteSettingRoutes);
+app.use("/api/certificates", certificateRoutes);
+app.use("/api/blogs", blogRoutes);
+app.use("/api/sponsors", sponsorRoutes);
+app.use("/api/projects", projectRoutes);
+app.use("/api/custom-pages", customPageRoutes);
+app.use("/api/designations", designationRoutes);
 
 app.get("/", (req, res) => {
   res.send("Welcome to the API! Visit /api/docs for documentation.");

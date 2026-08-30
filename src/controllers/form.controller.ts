@@ -9,7 +9,7 @@ import { buildHateoas } from "../utils/hateoas";
  */
 export const createForm = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { title, eventId, description, startDate, endDate, fields } = req.body;
+    const { title, eventId, description, startDate, endDate, fields, coverImageUrl, allowMultipleSubmissions } = req.body;
 
     if (!title || !eventId || !fields?.length) {
       return next(new AppError("Title, eventId and fields are required", 400));
@@ -19,9 +19,11 @@ export const createForm = async (req: Request, res: Response, next: NextFunction
       title,
       eventId,
       description: description || "",
+      coverImageUrl: coverImageUrl || "",
       startDate,
       endDate,
       fields,
+      allowMultipleSubmissions: allowMultipleSubmissions !== false, // default true
     });
 
     res.status(201).json({
@@ -119,6 +121,63 @@ export const disableForm = async (req: Request, res: Response, next: NextFunctio
     res.json({
       success: true,
       message: "Form disabled successfully",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Delete a form permanently (Admin)
+ */
+export const deleteForm = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const form = await FormModel.findByIdAndDelete(req.params.id);
+
+    if (!form) {
+      return next(new AppError("Form not found", 404));
+    }
+
+    res.json({
+      success: true,
+      message: "Form deleted successfully",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Update an existing form (Admin)
+ */
+export const updateForm = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { title, eventId, description, startDate, endDate, fields, coverImageUrl, allowMultipleSubmissions, isActive } = req.body;
+
+    const form = await FormModel.findByIdAndUpdate(
+      req.params.id,
+      {
+        ...(title !== undefined && { title }),
+        ...(eventId !== undefined && { eventId }),
+        ...(description !== undefined && { description }),
+        ...(coverImageUrl !== undefined && { coverImageUrl }),
+        ...(startDate !== undefined && { startDate }),
+        ...(endDate !== undefined && { endDate }),
+        ...(fields !== undefined && { fields }),
+        ...(allowMultipleSubmissions !== undefined && { allowMultipleSubmissions }),
+        ...(isActive !== undefined && { isActive }),
+      },
+      { new: true, runValidators: true }
+    );
+
+    if (!form) {
+      return next(new AppError("Form not found", 404));
+    }
+
+    res.json({
+      success: true,
+      message: "Form updated successfully",
+      data: form,
     });
   } catch (error) {
     next(error);

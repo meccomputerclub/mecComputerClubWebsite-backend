@@ -7,14 +7,18 @@ export interface IFormField {
   type: string;
   required: boolean;
   options?: { label: string; value: string }[];
+  fileAccept?: string; // e.g. "image/*,.pdf"
+  maxFileSizeMb?: number;
 }
 
 export interface IForm {
   title: string;
   eventId: Types.ObjectId;
   description?: string;
+  coverImageUrl?: string;
   fields: IFormField[];
   isActive: boolean;
+  allowMultipleSubmissions: boolean;
   startDate?: string;
   endDate?: string;
 }
@@ -26,6 +30,8 @@ const FieldSchema = new Schema<IFormField>(
     placeholder: String,
     type: String,
     required: Boolean,
+    fileAccept: String,
+    maxFileSizeMb: Number,
     options: [
       {
         label: String,
@@ -41,8 +47,10 @@ const FormSchema = new Schema<IForm>(
     title: { type: String, required: true },
     eventId: { type: Schema.Types.ObjectId, ref: "Event" },
     description: String,
+    coverImageUrl: { type: String, default: "" },
     fields: [FieldSchema],
     isActive: { type: Boolean, default: true },
+    allowMultipleSubmissions: { type: Boolean, default: true },
     startDate: {
       type: String,
       default: new Date().toISOString(),

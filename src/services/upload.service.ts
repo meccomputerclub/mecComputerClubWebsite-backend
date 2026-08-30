@@ -1,5 +1,14 @@
 import { v2 as cloudinary } from "cloudinary";
 import { IUploadResult } from "../types/upload.types";
+import dotenv from "dotenv";
+dotenv.config();
+
+// Ensure Cloudinary is configured even if multer.config.ts hasn't been imported yet
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 /**
  * Note: When using Multer with CloudinaryStorage, the file is

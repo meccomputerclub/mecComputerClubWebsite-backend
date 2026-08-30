@@ -1,10 +1,11 @@
-// src/controllers/upload.controller.ts
 import { Request, Response } from "express";
-import { uploadToServer } from "../services/upload.service";
+import { uploadToCloudinary } from "../services/upload.service";
 
 export const uploadImage = async (req: Request, res: Response) => {
   try {
     if (!req.file) return res.status(400).json({ message: "No image file" });
+
+    const result = await uploadToCloudinary(req.file);
 
     const folder = (req.query.folder as string) || "misc";
 
@@ -21,11 +22,8 @@ export const uploadImage = async (req: Request, res: Response) => {
       publicId = `${sanitizedPrefix}_${sanitizedName}`;
     }
 
-    // Now upload using local server service
-    const result = await uploadToServer(req.file, folder, publicId);
-
     res.json({
-      url: result.secure_url, // points to /uploads/filename
+      url: result.secure_url || result.url,
       public_id: result.public_id,
       folder,
     });

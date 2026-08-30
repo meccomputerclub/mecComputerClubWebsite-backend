@@ -1,13 +1,8 @@
 import { Request, Response } from "express";
 import { HomePage } from "../models/Page.model";
 
-/**
- * @desc    Get Home Page data
- * @route   GET /api/homepage
- */
 export const getHomePage = async (req: Request, res: Response) => {
   try {
-    // We use findOne because there's usually only one homepage config
     const homeData = await HomePage.findOne()
       .populate("featuredData.sponsors")
       .populate("featuredData.events")
@@ -18,20 +13,14 @@ export const getHomePage = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Home page data not found" });
     }
 
-    res.status(200).json(homeData);
+    res.status(200).json({ success: true, data: homeData });
   } catch (error) {
     res.status(500).json({ message: "Server Error", error });
   }
 };
 
-/**
- * @desc    Update or Create Home Page data
- * @route   POST /api/homepage (or PUT)
- */
 export const updateHomePage = async (req: Request, res: Response) => {
   try {
-    // upsert: true will create the document if it doesn't exist
-    // new: true returns the modified document rather than the original
     const updatedData = await HomePage.findOneAndUpdate({}, req.body, {
       new: true,
       upsert: true,
@@ -48,9 +37,45 @@ export const updateHomePage = async (req: Request, res: Response) => {
 };
 
 /**
- * @desc    Reset stats (Example of a specific action)
- * @route   PATCH /api/homepage/stats
+ * @desc  Partial update — only sets the fields provided (no required-field validation errors)
+ * @route PATCH /api/page
  */
+export const patchHomePage = async (req: Request, res: Response) => {
+  try {
+    // Build a flat $set map so only provided fields are updated
+    const body = req.body as Record<string, any>;
+    const setMap: Record<string, any> = {};
+
+    const flatten = (obj: Record<string, any>, prefix = "") => {
+      for (const key of Object.keys(obj)) {
+        const val = obj[key];
+        const fullKey = prefix ? `${prefix}.${key}` : key;
+        if (val !== null && typeof val === "object" && !Array.isArray(val)) {
+          flatten(val, fullKey);
+        } else {
+          setMap[fullKey] = val;
+        }
+      }
+    };
+
+    flatten(body);
+
+    const updatedData = await HomePage.findOneAndUpdate(
+      {},
+      { $set: setMap },
+      { new: true, upsert: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Home page updated successfully",
+      data: updatedData,
+    });
+  } catch (error) {
+    res.status(400).json({ message: "Update failed", error });
+  }
+};
+
 export const updateStats = async (req: Request, res: Response) => {
   try {
     const updatedStats = await HomePage.findOneAndUpdate(

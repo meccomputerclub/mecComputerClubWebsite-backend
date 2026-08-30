@@ -27,16 +27,32 @@ export const createUser = async (payload: Partial<IUser>) => {
 
   await sendEmail(user.email, "Verify your MEC Computer Club account", htmlTemplate);
 
-  //void invitation code if any
+  // Update invitation code usage
   try {
-    const invitationCode = await InvitationCodeModel.findOne({ email: user.email });
-    if (invitationCode) {
-      await InvitationCodeModel.findByIdAndUpdate(invitationCode._id, {
-        $set: { status: "consumed" },
+    let inviteCodeDoc = null;
+    if ((payload as any).inviteCode) {
+      inviteCodeDoc = await InvitationCodeModel.findOne({
+        code: (payload as any).inviteCode.toString().trim().toUpperCase(),
       });
     }
+    if (!inviteCodeDoc) {
+      inviteCodeDoc = await InvitationCodeModel.findOne({ email: user.email.toLowerCase().trim() });
+    }
+
+    if (inviteCodeDoc) {
+      if (inviteCodeDoc.codeType === "permanent") {
+        await InvitationCodeModel.findByIdAndUpdate(inviteCodeDoc._id, {
+          $inc: { usageCount: 1 },
+        });
+      } else {
+        await InvitationCodeModel.findByIdAndUpdate(inviteCodeDoc._id, {
+          $set: { status: "consumed" },
+          $inc: { usageCount: 1 },
+        });
+      }
+    }
   } catch (error) {
-    console.log("Error changing invitation code.");
+    console.log("Error updating invitation code:", error);
   }
 
   // notify admins (for now, just send a mail placeholder - you can send to admin list)
@@ -93,7 +109,7 @@ export const verifyUserByCode = async (email: string, code: string) => {
     department: user.department,
     batch: user.batch,
     studentId: user.studentId,
-    link: `${FRONTEND_URL}/dashboard/members`,
+    link: `${FRONTEND_URL}/dashboard/member-approvals/${user._id}`,
     userImageUrl: user.imageUrl,
   });
   await sendEmail(
@@ -142,7 +158,7 @@ export const requestFastVerification = async (userId: string) => {
 
 export const createPasswordReset = async (email: string) => {
   const user = await User.findOne({ email }).select(
-    "+password_reset_token +password_reset_expiry +password"
+    "+passwordResetToken +passwordResetExpiry +password"
   );
   if (!user) throw new Error("User not found");
   const resetToken = user.generatePasswordReset();
