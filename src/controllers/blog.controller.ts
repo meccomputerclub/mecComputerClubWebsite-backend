@@ -50,8 +50,6 @@ export const getBlogById = async (req: Request, res: Response, next: NextFunctio
   try {
     const blog = await Blog.findById(req.params.id).populate("author", "fullName imageUrl").lean();
     if (!blog) return res.status(404).json({ success: false, message: "Blog not found" });
-    // Increment views
-    await Blog.findByIdAndUpdate(req.params.id, { $inc: { views: 1 } });
     res.status(200).json({ success: true, data: blog });
   } catch (error) { next(error); }
 };
@@ -60,10 +58,34 @@ export const getBlogBySlug = async (req: Request, res: Response, next: NextFunct
   try {
     const blog = await Blog.findOne({ slug: req.params.slug }).populate("author", "fullName imageUrl").lean();
     if (!blog) return res.status(404).json({ success: false, message: "Blog not found" });
-    // Increment views
-    await Blog.findByIdAndUpdate(blog._id, { $inc: { views: 1 } });
     res.status(200).json({ success: true, data: blog });
   } catch (error) { next(error); }
+};
+
+export const incrementBlogView = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const identifier = req.params.id || req.params.slug;
+    if (!identifier) {
+      return res.status(400).json({ success: false, message: "Blog identifier is required" });
+    }
+
+    const isObjectId = /^[0-9a-fA-F]{24}$/.test(identifier);
+    const filter = isObjectId ? { _id: identifier } : { slug: identifier };
+
+    const blog = await Blog.findOneAndUpdate(
+      filter,
+      { $inc: { views: 1 } },
+      { new: true, select: "views" }
+    );
+
+    if (!blog) {
+      return res.status(404).json({ success: false, message: "Blog not found" });
+    }
+
+    res.status(200).json({ success: true, views: blog.views });
+  } catch (error) {
+    next(error);
+  }
 };
 
 export const toggleFeaturedBlog = async (req: Request, res: Response, next: NextFunction) => {
