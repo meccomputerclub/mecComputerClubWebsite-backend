@@ -8,6 +8,7 @@ import { Project } from "../models/Project.model";
 import { Blog } from "../models/Blog.model";
 import { generateJWT } from "../utils/generateTokens";
 import { uploadToCloudinary, deleteFromCloudinary } from "../services/upload.service";
+import { createBroadcastNotification } from "../services/notification.service";
 import AppError from "../utils/AppError";
 
 export const register = async (req: Request, res: Response) => {
@@ -161,6 +162,18 @@ export const register = async (req: Request, res: Response) => {
     // 9. Clear clearance cookies
     res.clearCookie("invitation_code", { path: "/" });
     res.clearCookie("invitation_validated", { path: "/" });
+
+    // Notify executive board about new registration application
+    createBroadcastNotification({
+      recipientRole: "executive",
+      type: "approval",
+      title: "New Member Application",
+      message: `${user.fullName || "A new student"} submitted an application for club membership.`,
+      link: "/dashboard?tab=members-management",
+      actionLabel: "Review Application",
+      priority: "high",
+      metadata: { applicantId: user._id },
+    }).catch((err) => console.error("Notification creation error:", err));
 
     // 10. Success Response
     return res.status(201).json({

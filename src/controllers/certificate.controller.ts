@@ -5,6 +5,7 @@ import { Certificate } from "../models/Certificate.model";
 import { CertificateTemplate } from "../models/CertificateTemplate.model";
 import User from "../models/User.model";
 import { Event } from "../models/Event.model";
+import { createNotification } from "../services/notification.service";
 
 /**
  * @desc  Verify a certificate by its unique certificateId
@@ -225,6 +226,18 @@ export const createCertificate = async (req: Request, res: Response, next: NextF
     // Link certificate to user profile if user exists
     if (finalUserId) {
       await User.findByIdAndUpdate(finalUserId, { $addToSet: { certificates: cert._id } });
+
+      // Dispatch in-app notification to certificate recipient
+      createNotification({
+        recipient: finalUserId,
+        type: "certificate",
+        title: "Certificate Issued! 🎓",
+        message: `You have been officially awarded the "${name}" credential.`,
+        link: `/verify?cert=${finalCertId}`,
+        actionLabel: "View Certificate",
+        priority: "high",
+        metadata: { certificateId: cert._id, certId: finalCertId },
+      }).catch((err) => console.error("Certificate notification error:", err));
     }
 
     // If associated with an event, link to event

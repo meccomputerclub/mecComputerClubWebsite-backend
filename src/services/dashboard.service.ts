@@ -8,6 +8,7 @@ import { Asset } from "../models/Asset.model"; // Assuming this model exists
 import { DashboardStats } from "../types/dashboard.types";
 import { generateEmail } from "../utils/generateEmailTemplate";
 import { sendEmail } from "../utils/sendEmail";
+import { createNotification } from "./notification.service";
 // Note: You would import the actual models and types here
 
 // --- MEMBER DASHBOARD SERVICE ---
@@ -276,9 +277,20 @@ export const approveOrRejectUser = async (
     else if (user.role === "guest") user.role = "member";
     await user.save();
 
-    // notify user
+    // notify user via email
     const emailTemplate = generateEmail("status", { userName: user.fullName, status: "Approved" });
     await sendEmail(user.email, "Your MEC Club membership was approved", emailTemplate);
+
+    // dispatch in-app notification
+    createNotification({
+      recipient: user._id,
+      type: "approval",
+      title: "Membership Approved! 🎉",
+      message: "Congratulations! Your MEC Computer Club membership application has been approved. Welcome aboard!",
+      link: "/dashboard",
+      actionLabel: "Access Dashboard",
+      priority: "high",
+    }).catch((err) => console.error("Notification creation error:", err));
 
     return user;
   } else {
@@ -290,6 +302,18 @@ export const approveOrRejectUser = async (
 
     const emailTemplate = generateEmail("status", { userName: user.fullName, status: "Rejected" });
     await sendEmail(user.email, "Your MEC Club application was rejected", emailTemplate);
+
+    // dispatch in-app notification
+    createNotification({
+      recipient: user._id,
+      type: "approval",
+      title: "Membership Application Update",
+      message: `Your application was reviewed: ${user.rejectionReason}`,
+      link: "/profile",
+      actionLabel: "View Details",
+      priority: "normal",
+    }).catch((err) => console.error("Notification creation error:", err));
+
     return user;
   }
 };

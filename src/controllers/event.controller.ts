@@ -8,6 +8,7 @@ import { Certificate } from "../models/Certificate.model";
 import { Media } from "../models/Media.model";
 import { uploadToCloudinary, deleteFromCloudinary } from "../services/upload.service";
 import { sendEmail } from "../utils/sendEmail";
+import { createNotification, createBroadcastNotification } from "../services/notification.service";
 import crypto from "crypto";
 
 // ── Basic CRUD ─────────────────────────────────────────────────────────────
@@ -24,6 +25,20 @@ export const handleCreateEvent = async (req: Request, res: Response) => {
     if (event.linkedForm && mongoose.Types.ObjectId.isValid(event.linkedForm.toString())) {
       await FormModel.findByIdAndUpdate(event.linkedForm, { eventId: event._id });
     }
+
+    // Broadcast in-app notification about new event
+    createBroadcastNotification({
+      recipientRole: "all",
+      type: "event",
+      title: `New Event: ${event.title}`,
+      message: event.description
+        ? `${event.description.slice(0, 100)}...`
+        : `MEC Computer Club has published a new event: ${event.title}`,
+      link: `/events/${event.slug || event._id}`,
+      actionLabel: "View Event",
+      priority: "normal",
+      metadata: { eventId: event._id },
+    }).catch((err) => console.error("Event notification error:", err));
 
     res.status(201).json({ success: true, data: event });
   } catch (error: any) {
@@ -405,6 +420,18 @@ export const approveParticipant = async (req: Request, res: Response, next: Next
       await User.findByIdAndUpdate(participant.userId, {
         $addToSet: { eventsAttended: eventId },
       });
+
+      // Dispatch in-app notification to attendee
+      createNotification({
+        recipient: participant.userId,
+        type: "event",
+        title: "Registration Approved! 🎟️",
+        message: `Your registration for "${event.title}" has been confirmed. See you at the event!`,
+        link: `/events/${event.slug || event._id}`,
+        actionLabel: "View Event",
+        priority: "normal",
+        metadata: { eventId: event._id },
+      }).catch((err) => console.error("Participant notification error:", err));
     }
 
     await event.save();

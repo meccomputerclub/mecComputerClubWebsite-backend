@@ -20,9 +20,11 @@ import designationRoutes from "./routes/designation.routes";
 import pageContentRoutes from "./routes/pageContent.routes";
 
 import certificateTemplateRoutes from "./routes/certificateTemplate.routes";
+import notificationRoutes from "./routes/notification.routes";
 import { getGalleryMedia } from "./controllers/event.controller";
 
 // Ensure all models are registered with Mongoose before any route handler runs
+import "./models/Notification.model";
 import "./models/Media.model";
 import "./models/CertificateTemplate.model";
 import "./models/Certificate.model";
@@ -112,6 +114,7 @@ app.use("/api/projects", projectRoutes);
 app.use("/api/custom-pages", customPageRoutes);
 app.use("/api/designations", designationRoutes);
 app.use("/api/page-content", pageContentRoutes);
+app.use("/api/notifications", notificationRoutes);
 
 app.get("/", (req, res) => {
   res.send("Welcome to the API! Visit /api/docs for documentation.");

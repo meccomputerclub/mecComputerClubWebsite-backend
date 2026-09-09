@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import ContactMessage from "../models/ContactMessage.model";
 import { sendEmail } from "../utils/sendEmail";
+import { createBroadcastNotification } from "../services/notification.service";
 
 /**
  * @desc  Submit a contact message (public)
@@ -15,6 +16,18 @@ export const createContactMessage = async (req: Request, res: Response, next: Ne
     }
 
     const message = await ContactMessage.create({ senderName, senderEmail, subject, body });
+
+    // Notify executives about new inquiry
+    createBroadcastNotification({
+      recipientRole: "executive",
+      type: "message",
+      title: `Inquiry: ${subject}`,
+      message: `${senderName} (${senderEmail}): "${body.length > 80 ? body.slice(0, 80) + '...' : body}"`,
+      link: "/dashboard?tab=messages",
+      actionLabel: "View Messages",
+      priority: "normal",
+      metadata: { messageId: message._id },
+    }).catch((err) => console.error("Contact message notification error:", err));
 
     res.status(201).json({
       success: true,
