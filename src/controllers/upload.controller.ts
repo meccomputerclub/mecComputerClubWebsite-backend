@@ -10,7 +10,7 @@ export const uploadImage = async (req: Request, res: Response) => {
     res.json({
       url: result.secure_url || result.url,
       public_id: result.public_id,
-      folder: req.query.folder || "misc",
+      folder: req.query.folder || req.body?.folder || "misc",
     });
   } catch (err: any) {
     console.error("Cloudinary Upload error:", err);

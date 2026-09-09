@@ -13,7 +13,7 @@ export interface IFormField {
 
 export interface IForm {
   title: string;
-  eventId: Types.ObjectId;
+  eventId?: Types.ObjectId | null;
   description?: string;
   coverImageUrl?: string;
   fields: IFormField[];
@@ -45,7 +45,7 @@ const FieldSchema = new Schema<IFormField>(
 const FormSchema = new Schema<IForm>(
   {
     title: { type: String, required: true },
-    eventId: { type: Schema.Types.ObjectId, ref: "Event" },
+    eventId: { type: Schema.Types.ObjectId, ref: "Event", default: null },
     description: String,
     coverImageUrl: { type: String, default: "" },
     fields: [FieldSchema],

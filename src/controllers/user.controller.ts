@@ -1,11 +1,17 @@
 import { NextFunction, Request, Response } from "express";
 import * as userService from "../services/user.service";
 import User, { IUser } from "../models/User.model";
+import InvitationCodeModel from "../models/InvitationCode.model";
+import { Certificate } from "../models/Certificate.model";
+import { Event } from "../models/Event.model";
+import { Project } from "../models/Project.model";
+import { Blog } from "../models/Blog.model";
 import { generateJWT } from "../utils/generateTokens";
 import { uploadToCloudinary, deleteFromCloudinary } from "../services/upload.service";
 import AppError from "../utils/AppError";
 
 export const register = async (req: Request, res: Response) => {
+  let profileImageUrl: string | null = null;
   try {
     // 1. Ensure form data exists
     if (!req.body.data) {
@@ -46,37 +52,82 @@ export const register = async (req: Request, res: Response) => {
       }
 
       if (!payload.session) {
-        payload.session = clubRole === "advisor" ? "Faculty" : "2021-22";
+        payload.session = payload.batch || (clubRole === "advisor" ? "Faculty" : "2021-22");
       }
       if (!payload.batch) {
-        payload.batch = clubRole === "advisor" ? "Faculty" : `${payload.department || "CSE"}`;
+        payload.batch = payload.session || (clubRole === "advisor" ? "Faculty" : `${payload.department || "CSE"}`);
       }
-      if (clubRole === "alumni") {
+      if (clubRole === "alumni" || payload.isGraduated) {
         payload.isGraduated = true;
       }
     } catch (err) {
       return res.status(400).json({ success: false, message: "Invalid JSON format" });
     }
 
-    // 3. Upload image (required)
-    if (!req.file) {
-      return res.status(400).json({ success: false, message: "Profile image is required" });
+    // 3. Strict Invitation Code Validation (MUST be verified before any database or Cloudinary operations)
+    const rawInviteCode = (
+      payload.inviteCode ||
+      req.headers["x-invite-code"] ||
+      req.cookies?.invitation_code ||
+      ""
+    ).toString().trim().toUpperCase();
+
+    if (!rawInviteCode) {
+      return res.status(403).json({
+        success: false,
+        message: "An invitation clearance code is strictly required to register. Please obtain a clearance key.",
+      });
     }
 
-    let profileImageUrl: string | null = null;
-
-    try {
-      const uploadResult = await uploadToCloudinary(req.file);
-      profileImageUrl = uploadResult.url;
-    } catch (err) {
-      console.error("Image upload failed:", err);
-      return res.status(500).json({ success: false, message: "Image upload failed" });
+    const inviteDoc = await InvitationCodeModel.findOne({ code: rawInviteCode });
+    if (!inviteDoc) {
+      return res.status(403).json({
+        success: false,
+        message: "Invalid invitation code. Access denied.",
+      });
     }
 
-    // 4. Attach image to payload
-    payload.imageUrl = profileImageUrl;
+    if (inviteDoc.status === "discontinued" || inviteDoc.status === "cancelled") {
+      return res.status(403).json({
+        success: false,
+        message: "This invitation code has been discontinued or cancelled by administrators.",
+      });
+    }
 
-    // 5. Unique Check
+    if (inviteDoc.status === "consumed") {
+      return res.status(403).json({
+        success: false,
+        message: "This single-use invitation code has already been consumed and cannot be reused.",
+      });
+    }
+
+    if (inviteDoc.expiresAt && inviteDoc.expiresAt < new Date()) {
+      inviteDoc.status = "expired";
+      await inviteDoc.save();
+      return res.status(410).json({
+        success: false,
+        message: "This invitation code has expired.",
+      });
+    }
+
+    if (inviteDoc.maxUses && inviteDoc.maxUses > 0 && inviteDoc.usageCount >= inviteDoc.maxUses) {
+      return res.status(403).json({
+        success: false,
+        message: "This invitation code has reached its maximum usage limit.",
+      });
+    }
+
+    // For single-use codes bound to a specific email, verify exact email match
+    if (inviteDoc.codeType === "single_use" && inviteDoc.email) {
+      if (inviteDoc.email.toLowerCase().trim() !== payload.email.toLowerCase().trim()) {
+        return res.status(403).json({
+          success: false,
+          message: `This invitation code is assigned to ${inviteDoc.email}. You cannot use it with another email address.`,
+        });
+      }
+    }
+
+    // 4. Pre-upload Unique Account Check
     const exists = await User.findOne({
       $or: [{ email: payload.email.toLowerCase().trim() }, { studentId: payload.studentId }],
     });
@@ -87,10 +138,31 @@ export const register = async (req: Request, res: Response) => {
         .json({ success: false, message: "Email or student ID already registered" });
     }
 
-    // 6. Create user
-    const user = await userService.createUser(payload);
+    // 5. Check image presence
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: "Profile image is required" });
+    }
 
-    // 7. Success Response
+    // 6. Upload image to Cloudinary
+    try {
+      const uploadResult = await uploadToCloudinary(req.file);
+      profileImageUrl = uploadResult.url;
+    } catch (err) {
+      console.error("Image upload failed:", err);
+      return res.status(500).json({ success: false, message: "Image upload failed" });
+    }
+
+    // 7. Attach image to payload
+    payload.imageUrl = profileImageUrl;
+
+    // 8. Create user & atomically consume invitation clearance
+    const user = await userService.createUser(payload, inviteDoc);
+
+    // 9. Clear clearance cookies
+    res.clearCookie("invitation_code", { path: "/" });
+    res.clearCookie("invitation_validated", { path: "/" });
+
+    // 10. Success Response
     return res.status(201).json({
       success: true,
       message: "Registered. Check your email for verification link & code",
@@ -103,6 +175,15 @@ export const register = async (req: Request, res: Response) => {
   } catch (err: any) {
     console.error("Register error:", err);
 
+    // Clean up uploaded Cloudinary image if user creation failed
+    if (profileImageUrl) {
+      try {
+        await deleteFromCloudinary(profileImageUrl);
+      } catch (delErr) {
+        console.warn("Failed to cleanup Cloudinary image after registration error:", delErr);
+      }
+    }
+
     // Check if it's a Mongoose validation error
     if (err.name === "ValidationError") {
       const errors: any = {};
@@ -113,7 +194,11 @@ export const register = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Validation failed", errors });
     }
 
-    return res.status(500).json({ success: false, message: "Server error" });
+    if (err instanceof AppError) {
+      return res.status(err.statusCode).json({ success: false, message: err.message });
+    }
+
+    return res.status(500).json({ success: false, message: err?.message || "Server error" });
   }
 };
 
@@ -343,12 +428,53 @@ export const updateMyProfile = async (req: Request, res: Response, next: NextFun
     const userId = (req as any).user.id;
 
     // Only allow safe fields to be updated
-    const allowedFields = ["fullName", "contactNumber", "department", "batch", "session", "address", "bio", "socialLinks", "coverUrl", "imageUrl"];
+    const allowedFields = [
+      "fullName",
+      "contactNumber",
+      "department",
+      "batch",
+      "session",
+      "address",
+      "bio",
+      "skills",
+      "website",
+      "experiences",
+      "education",
+      "socialLinks",
+      "coverUrl",
+      "imageUrl",
+      "imagePosition",
+      "coverPosition",
+    ];
     const updates: Record<string, any> = {};
 
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) {
-        updates[field] = req.body[field];
+        if (field === "skills" && Array.isArray(req.body[field])) {
+          updates[field] = Array.from(
+            new Set(
+              req.body[field]
+                .map((s: any) => (typeof s === "string" ? s.trim() : ""))
+                .filter((s: string) => s.length > 0)
+            )
+          );
+        } else if (field === "website" && typeof req.body[field] === "string") {
+          let url = req.body[field].trim();
+          if (url && !url.startsWith("http://") && !url.startsWith("https://")) {
+            url = "https://" + url;
+          }
+          updates[field] = url;
+        } else if (field === "experiences" && Array.isArray(req.body[field])) {
+          updates[field] = req.body[field].filter(
+            (exp: any) => exp && exp.companyName && exp.jobTitle
+          );
+        } else if (field === "education" && Array.isArray(req.body[field])) {
+          updates[field] = req.body[field].filter(
+            (edu: any) => edu && edu.institution && edu.degree
+          );
+        } else {
+          updates[field] = req.body[field];
+        }
       }
     }
 
@@ -528,6 +654,7 @@ export const updateUserImage = async (req: Request, res: Response, next: NextFun
         $set: {
           imageUrl: newImageUrl,
           ...(newImagePublicId ? { imagePublicId: newImagePublicId } : {}),
+          ...(req.body.imagePosition ? { imagePosition: req.body.imagePosition } : {}),
         },
       },
       {
@@ -611,6 +738,7 @@ export const updateUserCover = async (req: Request, res: Response, next: NextFun
         $set: {
           coverUrl: newCoverUrl,
           ...(newCoverPublicId ? { coverPublicId: newCoverPublicId } : {}),
+          ...(req.body.coverPosition ? { coverPosition: req.body.coverPosition } : {}),
         },
       },
       {
@@ -637,9 +765,74 @@ export const updateUserCover = async (req: Request, res: Response, next: NextFun
 
 export const updateUserRole = async (req: Request, res: Response, next: NextFunction) => {
   const id = req.params.id;
-  const { role, clubRole, customRole, designation, session, batch, department } = req.body;
+  const {
+    fullName,
+    email,
+    studentId,
+    contactNumber,
+    address,
+    bio,
+    department,
+    session,
+    batch,
+    isGraduated,
+    passingYear,
+    role,
+    clubRole,
+    customRole,
+    designation,
+    applicationStatus,
+    profileStatus,
+    skills,
+    website,
+    socialLinks,
+    imageUrl,
+    imagePosition,
+    coverUrl,
+    coverPosition,
+    experiences,
+    education,
+  } = req.body;
+
   try {
+    const existingUser = await User.findById(id);
+    if (!existingUser) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
     const updateData: any = {};
+
+    if (fullName !== undefined) updateData.fullName = fullName.trim();
+    if (email !== undefined && email.trim() !== "") {
+      const cleanEmail = email.toLowerCase().trim();
+      if (cleanEmail !== existingUser.email.toLowerCase()) {
+        const conflict = await User.findOne({ email: cleanEmail, _id: { $ne: id } });
+        if (conflict) {
+          return res.status(400).json({ success: false, message: "Email is already registered by another member." });
+        }
+        updateData.email = cleanEmail;
+      }
+    }
+    if (studentId !== undefined && studentId.trim() !== "") {
+      const cleanStudentId = studentId.trim();
+      if (cleanStudentId !== existingUser.studentId) {
+        const conflict = await User.findOne({ studentId: cleanStudentId, _id: { $ne: id } });
+        if (conflict) {
+          return res.status(400).json({ success: false, message: "Student ID is already registered by another member." });
+        }
+        updateData.studentId = cleanStudentId;
+      }
+    }
+    if (contactNumber !== undefined) updateData.contactNumber = contactNumber.trim();
+    if (address !== undefined) updateData.address = address;
+    if (bio !== undefined) updateData.bio = bio;
+    if (department !== undefined) updateData.department = department;
+    if (session !== undefined) updateData.session = session;
+    if (batch !== undefined) updateData.batch = batch;
+    if (isGraduated !== undefined) updateData.isGraduated = Boolean(isGraduated);
+    if (passingYear !== undefined) {
+      updateData.passingYear = passingYear ? Number(passingYear) : null;
+    }
     if (role !== undefined) updateData.role = role;
     if (clubRole !== undefined) updateData.clubRole = clubRole;
     if (customRole !== undefined) updateData.customRole = customRole;
@@ -647,28 +840,44 @@ export const updateUserRole = async (req: Request, res: Response, next: NextFunc
       updateData.designation = designation;
       if (customRole === undefined) updateData.customRole = designation;
     }
-    if (session !== undefined) updateData.session = session;
-    if (batch !== undefined) updateData.batch = batch;
-    if (department !== undefined) updateData.department = department;
+    if (applicationStatus !== undefined) updateData.applicationStatus = applicationStatus;
+    if (profileStatus !== undefined) updateData.profileStatus = profileStatus;
+    if (skills !== undefined) {
+      updateData.skills = Array.isArray(skills)
+        ? skills
+        : typeof skills === "string"
+        ? skills.split(",").map((s) => s.trim()).filter(Boolean)
+        : [];
+    }
+    if (website !== undefined) updateData.website = website;
+    if (socialLinks !== undefined) {
+      updateData.socialLinks = {
+        ...(existingUser.socialLinks || {}),
+        ...socialLinks,
+      };
+    }
+    if (imageUrl !== undefined) updateData.imageUrl = imageUrl;
+    if (imagePosition !== undefined) updateData.imagePosition = imagePosition;
+    if (coverUrl !== undefined) updateData.coverUrl = coverUrl;
+    if (coverPosition !== undefined) updateData.coverPosition = coverPosition;
+    if (experiences !== undefined && Array.isArray(experiences)) updateData.experiences = experiences;
+    if (education !== undefined && Array.isArray(education)) updateData.education = education;
 
     const updatedUser = await User.findByIdAndUpdate(
       id,
       { $set: updateData },
-      {
-        new: true,
-        runValidators: true,
-      }
-    )
-      .select("-password")
-      .lean();
+      { new: true, runValidators: true }
+    ).select("-password");
+
     res.status(200).json({
       status: "success",
-      message: "User role updated successfully.",
+      success: true,
+      message: "Member updated successfully.",
       data: {
         user: updatedUser,
       },
     });
-  } catch (error) {
+  } catch (error: any) {
     next(error);
   }
 };
@@ -679,7 +888,7 @@ export const getPublicMembers = async (req: Request, res: Response, next: NextFu
       applicationStatus: "approved",
     })
       .select(
-        "_id fullName imageUrl role clubRole customRole designation session batch department socialLinks bio isGraduated passingYear"
+        "_id fullName imageUrl imagePosition role clubRole customRole designation session batch department socialLinks bio isGraduated passingYear"
       )
       .lean();
 
@@ -811,4 +1020,325 @@ export const adminCreateMember = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: err?.message || "Server error" });
   }
 };
+
+/**
+ * @desc  Public Member Lookup & Activity Check
+ * @route GET /api/users/lookup/:identifier
+ * @access Public
+ */
+export const getMemberActivityLookup = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { identifier } = req.params;
+    if (!identifier || identifier.trim() === "") {
+      return res.status(400).json({ success: false, message: "Student ID, Email, or Member ID is required." });
+    }
+
+    const clean = identifier.trim();
+
+    // Query user by ObjectId, or exact studentId (case-insensitive), or email
+    const userQuery: any = {
+      $or: [
+        { studentId: { $regex: new RegExp(`^${clean}$`, "i") } },
+        { email: clean.toLowerCase() },
+      ],
+    };
+
+    if (clean.match(/^[0-9a-fA-F]{24}$/)) {
+      userQuery.$or.push({ _id: clean });
+    }
+
+    let user = await User.findOne(userQuery)
+      .select("-password -verificationToken -verificationCode -passwordResetToken -passwordResetCode")
+      .lean();
+
+    // Fallback: partial search by fullName if clean query has at least 3 characters
+    if (!user && clean.length >= 3) {
+      user = await User.findOne({ fullName: { $regex: clean, $options: "i" } })
+        .select("-password -verificationToken -verificationCode -passwordResetToken -passwordResetCode")
+        .lean();
+    }
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: `No club member record found matching "${clean}". Please verify the Student ID or email.`,
+      });
+    }
+
+    // Parallel aggregation of user's club activities
+    const [certificates, eventsAttended, winningEvents, projects, blogs] = await Promise.all([
+      Certificate.find({ recipient: user._id })
+        .populate("associatedEvent", "title slug date location category")
+        .sort({ issueDate: -1 })
+        .lean(),
+
+      Event.find({ attendees: user._id })
+        .select("title slug date location category coverImageUrl")
+        .sort({ date: -1 })
+        .lean(),
+
+      Event.find({ "winners.members": user._id })
+        .select("title slug date winners")
+        .lean(),
+
+      Project.find({ teamMembers: user._id })
+        .select("title description status startDate endDate githubLink liveDemoLink requiredSkills")
+        .sort({ startDate: -1 })
+        .lean(),
+
+      Blog.find({ author: user._id, isPublished: true })
+        .select("title slug excerpt publishedAt views likesCount tags coverImageUrl")
+        .sort({ publishedAt: -1 })
+        .lean(),
+    ]);
+
+    // Extract individual contest awards / podium finishes
+    const achievements: any[] = [];
+    winningEvents.forEach((ev: any) => {
+      ev.winners?.forEach((w: any) => {
+        const isMemberWinner = w.members?.some((m: any) => m.toString() === user._id.toString());
+        if (isMemberWinner) {
+          achievements.push({
+            eventId: ev._id,
+            eventTitle: ev.title,
+            eventSlug: ev.slug,
+            eventDate: ev.date,
+            position: w.position,
+            teamName: w.teamName,
+            prize: w.prize,
+          });
+        }
+      });
+    });
+
+    const totalValidCerts = certificates.filter((c: any) => c.status !== "revoked").length;
+
+    res.status(200).json({
+      success: true,
+      message: "Member activity record retrieved.",
+      data: {
+        member: {
+          id: user._id,
+          fullName: user.fullName,
+          studentId: user.studentId,
+          email: user.email,
+          department: user.department,
+          batch: user.batch,
+          session: user.session,
+          isGraduated: user.isGraduated,
+          passingYear: user.passingYear,
+          role: user.role,
+          clubRole: user.clubRole || "member",
+          designation: user.designation,
+          imageUrl: user.imageUrl,
+          coverUrl: user.coverUrl,
+          socialLinks: user.socialLinks || {},
+          isVerified: user.isVerified,
+          applicationStatus: user.applicationStatus,
+          joinedAt: (user as any).createdAt,
+        },
+        metrics: {
+          eventsCount: eventsAttended.length,
+          certificatesCount: totalValidCerts,
+          achievementsCount: achievements.length,
+          projectsCount: projects.length,
+          blogsCount: blogs.length,
+        },
+        certificates,
+        eventsAttended,
+        achievements,
+        projects,
+        blogs,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/* ══════════════════════════════════════════════════════════════════
+   🏆 COMPETITIVE PROGRAMMING CLUB LEADERBOARD (REAL MEMBERS)
+   ══════════════════════════════════════════════════════════════════ */
+interface CachedCfData {
+  rating: number;
+  maxRating: number;
+  rank: string;
+  avatar?: string;
+  solved: number;
+  lastFetched: number;
+}
+
+const cfLeaderboardCache = new Map<string, CachedCfData>();
+const CF_CACHE_TTL = 15 * 60 * 1000; // 15 minutes
+
+function extractCfHandle(input?: string): string {
+  if (!input) return "";
+  const trimmed = input.trim();
+  const match = trimmed.match(/(?:codeforces\.com\/profile\/)([\w.-]+)/i);
+  if (match) return match[1];
+  if (trimmed.includes("/")) return trimmed.split("/").filter(Boolean).pop() || "";
+  return trimmed.replace(/^@/, "");
+}
+
+export const getLeaderboard = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const rawMembers = await User.find({
+      applicationStatus: "approved",
+      clubRole: { $ne: "advisor" },
+    })
+      .select("_id fullName imageUrl role clubRole customRole designation socialLinks studentId batch department session")
+      .lean();
+
+    // Exclude any advisor, patron, or faculty accounts from the competitive programming leaderboard
+    const members = rawMembers.filter((m) => {
+      if (m.clubRole === "advisor") return false;
+      const desig = (m.designation || m.customRole || "").toLowerCase();
+      if (desig.includes("advisor") || desig.includes("patron") || desig.includes("principal")) return false;
+      if (m.batch?.toLowerCase() === "faculty" || m.session?.toLowerCase() === "faculty") return false;
+      return true;
+    });
+
+    // Identify all handles
+    const handleMemberMap = new Map<string, any>();
+    for (const m of members) {
+      const handle = extractCfHandle(m.socialLinks?.codeforces);
+      if (handle) {
+        handleMemberMap.set(handle.toLowerCase(), { member: m, originalHandle: handle });
+      }
+    }
+
+    const handlesToFetch = Array.from(handleMemberMap.keys()).filter((h) => {
+      const cached = cfLeaderboardCache.get(h);
+      return !cached || Date.now() - cached.lastFetched > CF_CACHE_TTL;
+    });
+
+    if (handlesToFetch.length > 0) {
+      try {
+        const infoUrl = `https://codeforces.com/api/user.info?handles=${handlesToFetch.join(";")}`;
+        const cfRes = await fetch(infoUrl, { signal: AbortSignal.timeout(6000) });
+        if (cfRes.ok) {
+          const cfData: any = await cfRes.json();
+          if (cfData.status === "OK" && Array.isArray(cfData.result)) {
+            for (const cfUser of cfData.result) {
+              const lowerH = cfUser.handle.toLowerCase();
+              const existing = cfLeaderboardCache.get(lowerH);
+              cfLeaderboardCache.set(lowerH, {
+                rating: cfUser.rating || 0,
+                maxRating: cfUser.maxRating || 0,
+                rank: cfUser.rank || "unrated",
+                avatar: cfUser.avatar || "",
+                solved: existing ? existing.solved : 0,
+                lastFetched: Date.now(),
+              });
+            }
+          }
+        }
+
+        // Fetch solved problem counts asynchronously
+        await Promise.allSettled(
+          handlesToFetch.map(async (h) => {
+            try {
+              const statusUrl = `https://codeforces.com/api/user.status?handle=${h}&from=1&count=1000`;
+              const statusRes = await fetch(statusUrl, { signal: AbortSignal.timeout(7000) });
+              if (statusRes.ok) {
+                const statusData: any = await statusRes.json();
+                if (statusData.status === "OK" && Array.isArray(statusData.result)) {
+                  const uniqueSolved = new Set(
+                    statusData.result
+                      .filter((s: any) => s.verdict === "OK" && s.problem)
+                      .map((s: any) => `${s.problem.contestId}-${s.problem.index}`)
+                  );
+                  const cached = cfLeaderboardCache.get(h);
+                  if (cached) {
+                    cached.solved = uniqueSolved.size;
+                  }
+                }
+              }
+            } catch {
+              // Ignore single status fetch errors
+            }
+          })
+        );
+      } catch (cfErr) {
+        console.warn("Codeforces API fetch error (using cached stats):", cfErr);
+      }
+    }
+
+    // Assemble leaderboard
+    const leaderboard = members.map((m) => {
+      const handle = extractCfHandle(m.socialLinks?.codeforces);
+      const cf = handle ? cfLeaderboardCache.get(handle.toLowerCase()) : null;
+
+      return {
+        userId: m._id.toString(),
+        name: m.fullName,
+        handle: handle || (m.studentId ? `ID: ${m.studentId}` : "Unlinked"),
+        hasCfHandle: Boolean(handle),
+        platform: "Codeforces",
+        rating: cf?.rating || 0,
+        maxRating: cf?.maxRating || 0,
+        tier: cf?.rank || "unrated",
+        solved: cf?.solved || 0,
+        avatar: cf?.avatar || m.imageUrl || "",
+        imageUrl: m.imageUrl || "",
+        designation: m.designation || m.customRole || (m.clubRole === "executive" ? "Executive Member" : m.clubRole === "advisor" ? "Advisor" : "Member"),
+        department: m.department || "CSE",
+        batch: m.batch || m.session || "",
+        profileUrl: `/profile/${m._id.toString()}`,
+      };
+    });
+
+    // Rank sorting: higher rating first, then solved, then name
+    leaderboard.sort((a, b) => {
+      if (b.rating !== a.rating) return b.rating - a.rating;
+      if (b.solved !== a.solved) return b.solved - a.solved;
+      return a.name.localeCompare(b.name);
+    });
+
+    leaderboard.forEach((entry, idx) => {
+      (entry as any).rank = idx + 1;
+    });
+
+    res.status(200).json({
+      success: true,
+      data: leaderboard,
+      totalMembers: leaderboard.length,
+      lastUpdated: new Date().toISOString(),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const deleteUser = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const userIdToDelete = req.params.id;
+    const requester = (req as any).user;
+
+    if (!userIdToDelete) {
+      return res.status(400).json({ success: false, message: "User ID is required." });
+    }
+
+    if (requester?.id === userIdToDelete) {
+      return res.status(400).json({ success: false, message: "You cannot delete your own account from the dashboard." });
+    }
+
+    const user = await User.findById(userIdToDelete);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found." });
+    }
+
+    // Permanently remove the user from MongoDB
+    await User.findByIdAndDelete(userIdToDelete);
+
+    res.status(200).json({
+      success: true,
+      message: `Member ${user.fullName} (${user.email}) was permanently deleted.`,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
 

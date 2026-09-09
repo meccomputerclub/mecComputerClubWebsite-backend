@@ -15,15 +15,23 @@ const DEFAULT_SETTINGS = [
   { key: "office_hours", value: "Sat–Thu: 10:00–18:00", label: "Office Hours", description: "Office hours shown on the contact page." },
   { key: "membership_fee", value: "500", label: "Membership Fee (BDT)", description: "Annual membership fee in BDT." },
   { key: "founded_year", value: "2015", label: "Founded Year", description: "Year the club was founded." },
+  // Batch settings — current most-junior (smallest) batch number per department.
+  // The registration form shows the last 10 batches up to this number.
+  { key: "batch_current_CSE", value: "6", label: "CSE — Current Junior Batch No.", description: "The most junior (latest) CSE batch number. Registration form shows the last 10 batches up to this number (e.g., 6 shows 1st–6th Batch)." },
+  { key: "batch_current_EEE", value: "14", label: "EEE — Current Junior Batch No.", description: "The most junior (latest) EEE batch number. Registration form shows the last 10 batches up to this number." },
+  { key: "batch_current_CE", value: "8", label: "CE — Current Junior Batch No.", description: "The most junior (latest) CE batch number. Registration form shows the last 10 batches up to this number." },
 ];
+
 
 export const getSiteSettings = async (req: Request, res: Response, next: NextFunction) => {
   try {
     let settings = await SiteSetting.find().sort({ key: 1 }).lean();
 
-    // Seed defaults if empty
-    if (settings.length === 0) {
-      await SiteSetting.insertMany(DEFAULT_SETTINGS);
+    // Ensure all default settings exist
+    const existingKeys = new Set(settings.map((s) => s.key));
+    const missingDefaults = DEFAULT_SETTINGS.filter((d) => !existingKeys.has(d.key));
+    if (missingDefaults.length > 0) {
+      await SiteSetting.insertMany(missingDefaults);
       settings = await SiteSetting.find().sort({ key: 1 }).lean();
     }
 
@@ -32,6 +40,38 @@ export const getSiteSettings = async (req: Request, res: Response, next: NextFun
     next(error);
   }
 };
+
+/**
+ * @desc  Public endpoint — returns only batch_current_* settings (no auth required)
+ * @route GET /api/site-settings/public
+ */
+export const getPublicBatchSettings = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    let batchSettings = await SiteSetting.find({ key: /^batch_current_/ }).lean();
+
+    // If any batch defaults are missing, insert them
+    const existingBatchKeys = new Set(batchSettings.map((s) => s.key));
+    const missingBatchDefaults = DEFAULT_SETTINGS.filter(
+      (d) => d.key.startsWith("batch_current_") && !existingBatchKeys.has(d.key)
+    );
+    if (missingBatchDefaults.length > 0) {
+      await SiteSetting.insertMany(missingBatchDefaults);
+      batchSettings = await SiteSetting.find({ key: /^batch_current_/ }).lean();
+    }
+
+    // Build a clean map: { CSE: 6, EEE: 14, CE: 8 }
+    const batchMap: Record<string, number> = { CSE: 6, EEE: 14, CE: 8 };
+    for (const s of batchSettings) {
+      const dept = s.key.replace("batch_current_", "");
+      batchMap[dept] = parseInt(s.value) || 1;
+    }
+
+    res.status(200).json({ success: true, data: batchMap });
+  } catch (error) {
+    next(error);
+  }
+};
+
 
 /**
  * @desc  Bulk update site settings (admin)

@@ -1,6 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
+import compression from "compression";
 import userRoutes from "./routes/user.routes";
 import uploadRoutes from "./routes/upload.routes";
 import inviteRoutes from "./routes/invite.routes";
@@ -16,9 +17,14 @@ import sponsorRoutes from "./routes/sponsor.routes";
 import projectRoutes from "./routes/project.routes";
 import customPageRoutes from "./routes/customPage.routes";
 import designationRoutes from "./routes/designation.routes";
+import pageContentRoutes from "./routes/pageContent.routes";
+
+import certificateTemplateRoutes from "./routes/certificateTemplate.routes";
+import { getGalleryMedia } from "./controllers/event.controller";
 
 // Ensure all models are registered with Mongoose before any route handler runs
 import "./models/Media.model";
+import "./models/CertificateTemplate.model";
 import "./models/Certificate.model";
 import "./models/Sponsor.model";
 import "./models/Project.model";
@@ -56,10 +62,21 @@ const corsOptions: CorsOptions = {
   },
   credentials: true,
   methods: "GET,POST,PUT,DELETE,PATCH,OPTIONS",
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "x-invitation-validated",
+    "x-invite-code",
+    "X-Invitation-Validated",
+    "X-Invite-Code",
+    "X-Requested-With",
+    "Accept",
+    "Origin",
+  ],
 };
 
 app.use(cors(corsOptions));
+app.use(compression());
 
 // parse before routes
 app.use(express.json({ limit: "5mb" }));
@@ -72,20 +89,24 @@ app.use("/uploads", express.static("uploads"));
 
 // routes
 app.use("/api/upload", uploadRoutes);
+app.use("/upload", uploadRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/invite", inviteRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/forms", formRoutes);
 app.use("/api/events", eventRoutes);
+app.get("/api/gallery", getGalleryMedia);
 app.use("/api/page", pageRoutes);
 app.use("/api/contact-messages", contactMessageRoutes);
 app.use("/api/site-settings", siteSettingRoutes);
 app.use("/api/certificates", certificateRoutes);
+app.use("/api/certificate-templates", certificateTemplateRoutes);
 app.use("/api/blogs", blogRoutes);
 app.use("/api/sponsors", sponsorRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/custom-pages", customPageRoutes);
 app.use("/api/designations", designationRoutes);
+app.use("/api/page-content", pageContentRoutes);
 
 app.get("/", (req, res) => {
   res.send("Welcome to the API! Visit /api/docs for documentation.");

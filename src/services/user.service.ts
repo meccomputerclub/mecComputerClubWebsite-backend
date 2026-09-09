@@ -5,58 +5,83 @@ import { sendEmail } from "../utils/sendEmail";
 import { generateEmail } from "../utils/generateEmailTemplate";
 import { generateOtpCode } from "../utils/generateInviteCode";
 import InvitationCodeModel from "../models/InvitationCode.model";
+import AppError from "../utils/AppError";
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 
-export const createUser = async (payload: Partial<IUser>) => {
+export const createUser = async (payload: Partial<IUser>, validatedInviteDoc?: any) => {
+  // 1. Resolve & Enforce Invitation Clearance
+  let inviteDoc = validatedInviteDoc;
+  if (!inviteDoc && (payload as any).inviteCode) {
+    inviteDoc = await InvitationCodeModel.findOne({
+      code: (payload as any).inviteCode.toString().trim().toUpperCase(),
+    });
+  }
+
+  if (!inviteDoc) {
+    throw new AppError("A valid invitation clearance code is strictly required to register.", 403);
+  }
+
+  // Pre-validate invitation clearance state
+  if (inviteDoc.status === "discontinued" || inviteDoc.status === "cancelled") {
+    throw new AppError("This invitation code has been discontinued or cancelled.", 403);
+  }
+  if (inviteDoc.status === "consumed") {
+    throw new AppError("This single-use invitation code has already been consumed.", 403);
+  }
+  if (inviteDoc.expiresAt && inviteDoc.expiresAt < new Date()) {
+    inviteDoc.status = "expired";
+    await inviteDoc.save();
+    throw new AppError("This invitation code has expired.", 410);
+  }
+  if (inviteDoc.maxUses && inviteDoc.maxUses > 0 && inviteDoc.usageCount >= inviteDoc.maxUses) {
+    throw new AppError("This invitation code has reached its maximum usage limit.", 403);
+  }
+
+  // 2. Atomically Consume / Increment Code
+  if (inviteDoc.codeType === "permanent") {
+    // Permanent codes remain consumable and only increment usageCount
+    await InvitationCodeModel.findByIdAndUpdate(inviteDoc._id, {
+      $inc: { usageCount: 1 },
+    });
+  } else {
+    // Single-use codes are atomically marked consumed to prevent race conditions
+    const updated = await InvitationCodeModel.findOneAndUpdate(
+      { _id: inviteDoc._id, status: "consumable" },
+      {
+        $set: { status: "consumed" },
+        $inc: { usageCount: 1 },
+      },
+      { new: true }
+    );
+
+    if (!updated) {
+      throw new AppError("This single-use invitation code has already been consumed.", 403);
+    }
+  }
+
+  // 3. Create User
   const user = new User(payload);
-  // generate verification tokens
   const { token, code } = user.generateEmailVerification();
   await user.save();
 
-  // prepare verification links
-  const verifyLink = `${FRONTEND_URL}/verify-email?token=${token}&email=${encodeURIComponent(
-    user.email
-  )}`;
-
-  const htmlTemplate = generateEmail("emailVerification", {
-    userName: user.fullName,
-    link: verifyLink,
-    code,
-  });
-
-  await sendEmail(user.email, "Verify your MEC Computer Club account", htmlTemplate);
-
-  // Update invitation code usage
+  // 4. Send Email Verification
   try {
-    let inviteCodeDoc = null;
-    if ((payload as any).inviteCode) {
-      inviteCodeDoc = await InvitationCodeModel.findOne({
-        code: (payload as any).inviteCode.toString().trim().toUpperCase(),
-      });
-    }
-    if (!inviteCodeDoc) {
-      inviteCodeDoc = await InvitationCodeModel.findOne({ email: user.email.toLowerCase().trim() });
-    }
+    const verifyLink = `${FRONTEND_URL}/verify-email?token=${token}&email=${encodeURIComponent(
+      user.email
+    )}`;
 
-    if (inviteCodeDoc) {
-      if (inviteCodeDoc.codeType === "permanent") {
-        await InvitationCodeModel.findByIdAndUpdate(inviteCodeDoc._id, {
-          $inc: { usageCount: 1 },
-        });
-      } else {
-        await InvitationCodeModel.findByIdAndUpdate(inviteCodeDoc._id, {
-          $set: { status: "consumed" },
-          $inc: { usageCount: 1 },
-        });
-      }
-    }
-  } catch (error) {
-    console.log("Error updating invitation code:", error);
+    const htmlTemplate = generateEmail("emailVerification", {
+      userName: user.fullName,
+      link: verifyLink,
+      code,
+    });
+
+    await sendEmail(user.email, "Verify your MEC Computer Club account", htmlTemplate);
+  } catch (mailErr) {
+    console.warn("Failed to send verification email:", mailErr);
   }
 
-  // notify admins (for now, just send a mail placeholder - you can send to admin list)
-  // optional: send an email to admins here
   return user;
 };
 

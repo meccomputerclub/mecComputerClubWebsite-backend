@@ -6,12 +6,16 @@ export interface IBlog extends Document {
   excerpt: string;
   content: string; // HTML or markdown
   coverImageUrl?: string;
+  coverImagePosition?: string;
   author: mongoose.Types.ObjectId;
   category: string;
   tags: string[];
   isPublished: boolean;
   publishedAt?: Date;
   views: number;
+  likes: mongoose.Types.ObjectId[];
+  likesCount: number;
+  featured?: boolean;
 }
 
 const BlogSchema: Schema = new Schema(
@@ -21,23 +25,40 @@ const BlogSchema: Schema = new Schema(
     excerpt: { type: String, required: true, trim: true },
     content: { type: String, required: true },
     coverImageUrl: { type: String },
+    coverImagePosition: { type: String, default: "50% 50%" },
     author: { type: Schema.Types.ObjectId, ref: "User", required: true },
     category: { type: String, default: "General", trim: true },
     tags: { type: [String], default: [] },
     isPublished: { type: Boolean, default: false },
     publishedAt: { type: Date },
     views: { type: Number, default: 0 },
+    likes: [{ type: Schema.Types.ObjectId, ref: "User" }],
+    likesCount: { type: Number, default: 0 },
+    featured: { type: Boolean, default: false, index: true },
   },
   { timestamps: true }
 );
 
-// Auto-generate slug from title if not provided
-BlogSchema.pre("validate", function (next) {
+BlogSchema.index({ isPublished: 1, featured: -1, publishedAt: -1, createdAt: -1 });
+BlogSchema.index({ author: 1, createdAt: -1 });
+
+// Auto-generate unique slug from title if not provided
+BlogSchema.pre("validate", async function (next) {
   if (!this.slug && this.title) {
-    this.slug = (this.title as string)
+    let baseSlug = (this.title as string)
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "");
+    if (!baseSlug) {
+      baseSlug = "blog-" + Date.now().toString(36);
+    }
+    const BlogModel = mongoose.models.Blog || mongoose.model("Blog", BlogSchema);
+    const existing = await BlogModel.findOne({ slug: baseSlug, _id: { $ne: this._id } });
+    if (existing) {
+      this.slug = `${baseSlug}-${Math.random().toString(36).substring(2, 7)}`;
+    } else {
+      this.slug = baseSlug;
+    }
   }
   next();
 });

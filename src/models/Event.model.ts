@@ -7,10 +7,51 @@ export interface IWinner {
   prize?: string;
 }
 
+export interface ITeamMember {
+  fullName: string;
+  studentId?: string;
+  email?: string;
+  phone?: string;
+  inGameId?: string;
+  department?: string;
+}
+
+export interface IApprovedParticipant {
+  _id?: string;
+  userId?: mongoose.Types.ObjectId;
+  fullName: string;
+  email: string;
+  studentId?: string;
+  department?: string;
+  phone?: string;
+  teamName?: string;
+  inGameId?: string;
+  isTeamLeader?: boolean;
+  approvedAt?: Date;
+}
+
 export interface IPendingParticipant {
-  userId: mongoose.Types.ObjectId;
+  userId?: mongoose.Types.ObjectId;
+  teamName?: string;
+  leaderName?: string;
+  leaderEmail?: string;
+  leaderPhone?: string;
+  leaderStudentId?: string;
+  inGameId?: string;
+  members?: ITeamMember[];
   registeredAt: Date;
   formData?: Record<string, any>;
+}
+
+export interface IEventReward {
+  position: string; // e.g. "1st Place (Champion)", "2nd Place (Runner-up)"
+  prize: string;    // e.g. "15,000 BDT + Trophy & Jerseys"
+}
+
+export interface IEventScheduleItem {
+  time: string;     // e.g. "10:00 AM" or "Day 1 - 02:00 PM"
+  title: string;    // e.g. "Opening Ceremony & Team Briefing"
+  description?: string;
 }
 
 export interface IEventSponsor {
@@ -29,14 +70,21 @@ export interface IEvent extends Document {
   eventTime?: string;
   location: string;
   onlineLink?: string;
-  category: "workshop" | "seminar" | "contest" | "conference" | "hackathon" | "social" | "other";
+  category: "workshop" | "seminar" | "contest" | "conference" | "hackathon" | "gaming" | "social" | "other";
   status: "scheduled" | "ongoing" | "completed" | "cancelled" | "postponed";
   isUpcoming?: boolean;
   // Registration
+  registrationType: "individual" | "team";
+  teamSize?: { min: number; max: number };
   registrationLink?: string;
   registrationDeadline?: Date;
   maxParticipants?: number;
   registrationFee?: number;
+  // Tournament / Event Highlights
+  prizePool?: string;
+  rewards: IEventReward[];
+  schedule: IEventScheduleItem[];
+  rules: string[];
   // Media
   coverImageUrl?: string;
   bannerImageUrl?: string;
@@ -50,7 +98,8 @@ export interface IEvent extends Document {
   // Custom HTML section
   customHtmlSection?: string;
   // Participants
-  attendees: mongoose.Types.ObjectId[];           // approved participants
+  attendees: mongoose.Types.ObjectId[];           // approved member user IDs
+  approvedParticipants: IApprovedParticipant[];   // rich list of all approved participants (members & non-members)
   pendingParticipants: IPendingParticipant[];      // awaiting admin approval
   // Winners (for contests/hackathons)
   winners: IWinner[];
@@ -61,6 +110,7 @@ export interface IEvent extends Document {
   certificates: mongoose.Types.ObjectId[];
   projects: mongoose.Types.ObjectId[];
   forms: mongoose.Types.ObjectId[];
+  linkedForm?: mongoose.Types.ObjectId;
 }
 
 const WinnerSchema = new Schema<IWinner>({
@@ -70,11 +120,51 @@ const WinnerSchema = new Schema<IWinner>({
   prize: { type: String, trim: true },
 }, { _id: true });
 
+const TeamMemberSchema = new Schema<ITeamMember>({
+  fullName: { type: String, required: true, trim: true },
+  studentId: { type: String, trim: true },
+  email: { type: String, trim: true },
+  phone: { type: String, trim: true },
+  inGameId: { type: String, trim: true },
+  department: { type: String, trim: true },
+}, { _id: false });
+
+const ApprovedParticipantSchema = new Schema<IApprovedParticipant>({
+  userId: { type: Schema.Types.ObjectId, ref: "User" },
+  fullName: { type: String, required: true, trim: true },
+  email: { type: String, required: true, trim: true },
+  studentId: { type: String, trim: true },
+  department: { type: String, trim: true },
+  phone: { type: String, trim: true },
+  teamName: { type: String, trim: true },
+  inGameId: { type: String, trim: true },
+  isTeamLeader: { type: Boolean, default: false },
+  approvedAt: { type: Date, default: Date.now },
+}, { _id: true });
+
 const PendingParticipantSchema = new Schema<IPendingParticipant>({
-  userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
+  userId: { type: Schema.Types.ObjectId, ref: "User" },
+  teamName: { type: String, trim: true },
+  leaderName: { type: String, trim: true },
+  leaderEmail: { type: String, trim: true },
+  leaderPhone: { type: String, trim: true },
+  leaderStudentId: { type: String, trim: true },
+  inGameId: { type: String, trim: true },
+  members: { type: [TeamMemberSchema], default: [] },
   registeredAt: { type: Date, default: Date.now },
   formData: { type: Schema.Types.Mixed },
 }, { _id: true });
+
+const EventRewardSchema = new Schema<IEventReward>({
+  position: { type: String, required: true, trim: true },
+  prize: { type: String, required: true, trim: true },
+}, { _id: false });
+
+const EventScheduleItemSchema = new Schema<IEventScheduleItem>({
+  time: { type: String, required: true, trim: true },
+  title: { type: String, required: true, trim: true },
+  description: { type: String, trim: true },
+}, { _id: false });
 
 const EventSponsorSchema = new Schema<IEventSponsor>({
   sponsorId: { type: Schema.Types.ObjectId, ref: "Sponsor", required: true },
@@ -95,7 +185,7 @@ const EventSchema: Schema = new Schema(
     onlineLink: { type: String },
     category: {
       type: String,
-      enum: ["workshop", "seminar", "contest", "conference", "hackathon", "social", "other"],
+      enum: ["workshop", "seminar", "contest", "conference", "hackathon", "gaming", "social", "other"],
       default: "seminar",
       required: true,
       index: true,
@@ -105,10 +195,25 @@ const EventSchema: Schema = new Schema(
       enum: ["scheduled", "ongoing", "completed", "cancelled", "postponed"],
       default: "scheduled",
     },
+    registrationType: {
+      type: String,
+      enum: ["individual", "team"],
+      default: "individual",
+    },
+    teamSize: {
+      min: { type: Number, default: 1 },
+      max: { type: Number, default: 4 },
+    },
     registrationLink: { type: String },
     registrationDeadline: { type: Date },
     maxParticipants: { type: Number },
     registrationFee: { type: Number, default: 0 },
+    // Tournament & Highlights
+    prizePool: { type: String, trim: true },
+    rewards: { type: [EventRewardSchema], default: [] },
+    schedule: { type: [EventScheduleItemSchema], default: [] },
+    rules: { type: [String], default: [] },
+    // Media
     coverImageUrl: { type: String },
     bannerImageUrl: { type: String },
     organizer: { type: String, trim: true },
@@ -119,6 +224,7 @@ const EventSchema: Schema = new Schema(
     customHtmlSection: { type: String },
     // Participants
     attendees: [{ type: Schema.Types.ObjectId, ref: "User" }],
+    approvedParticipants: { type: [ApprovedParticipantSchema], default: [] },
     pendingParticipants: { type: [PendingParticipantSchema], default: [] },
     // Winners
     winners: { type: [WinnerSchema], default: [] },
@@ -129,6 +235,7 @@ const EventSchema: Schema = new Schema(
     certificates: [{ type: Schema.Types.ObjectId, ref: "Certificate" }],
     projects: [{ type: Schema.Types.ObjectId, ref: "Project" }],
     forms: [{ type: Schema.Types.ObjectId, ref: "Form" }],
+    linkedForm: { type: Schema.Types.ObjectId, ref: "Form" },
   },
   {
     timestamps: true,
@@ -137,8 +244,38 @@ const EventSchema: Schema = new Schema(
   }
 );
 
+EventSchema.index({ isPublished: 1, date: -1 });
+EventSchema.index({ slug: 1 });
+EventSchema.index({ status: 1, date: -1 });
+
 EventSchema.virtual("isUpcoming").get(function (this: IEvent) {
   return this.date > new Date();
 });
 
+// Auto-generate slug from title on save
+EventSchema.pre("save", async function (this: IEvent, next) {
+  if (this.isModified("title") || !this.slug) {
+    let baseSlug = this.title
+      .toLowerCase()
+      .replace(/[^\w\s-]/g, "")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .trim();
+
+    // Ensure uniqueness by appending a counter if needed
+    let slug = baseSlug;
+    let counter = 0;
+    const EventModel = mongoose.model("Event");
+    while (true) {
+      const existing = await EventModel.findOne({ slug, _id: { $ne: this._id } });
+      if (!existing) break;
+      counter++;
+      slug = `${baseSlug}-${counter}`;
+    }
+    this.slug = slug;
+  }
+  next();
+});
+
 export const Event = mongoose.model<IEvent>("Event", EventSchema);
+

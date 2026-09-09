@@ -3,16 +3,28 @@ import mongoose from "mongoose";
 import * as EventService from "../services/event.service";
 import { Event } from "../models/Event.model";
 import User from "../models/User.model";
+import FormModel from "../models/Form.model";
 import { Certificate } from "../models/Certificate.model";
 import { Media } from "../models/Media.model";
 import { uploadToCloudinary, deleteFromCloudinary } from "../services/upload.service";
+import { sendEmail } from "../utils/sendEmail";
 import crypto from "crypto";
 
 // ── Basic CRUD ─────────────────────────────────────────────────────────────
 
 export const handleCreateEvent = async (req: Request, res: Response) => {
   try {
+    if (!req.body.linkedForm || req.body.linkedForm === "" || !mongoose.Types.ObjectId.isValid(req.body.linkedForm)) {
+      delete req.body.linkedForm;
+    }
+
     const event = await EventService.createEvent(req.body);
+
+    // Two-way sync: If linkedForm was selected, link form to this event (it is no longer independent)
+    if (event.linkedForm && mongoose.Types.ObjectId.isValid(event.linkedForm.toString())) {
+      await FormModel.findByIdAndUpdate(event.linkedForm, { eventId: event._id });
+    }
+
     res.status(201).json({ success: true, data: event });
   } catch (error: any) {
     res.status(400).json({ success: false, message: error.message });
@@ -26,6 +38,45 @@ export const handleGetEvents = async (req: Request, res: Response) => {
     if (category) filter.category = category;
     if (status) filter.status = status;
     const events = await EventService.getAllEvents(filter);
+    res.status(200).json({ success: true, count: events.length, data: events });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const getMyEvents = async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+
+    const user = await User.findById(userId).select("eventsAttended studentId email").lean();
+    const userAttendedIds = (user?.eventsAttended || []).map((id: any) => id.toString());
+
+    const orConditions: any[] = [
+      { attendees: userId },
+      { "approvedParticipants.userId": userId },
+      { "pendingParticipants.userId": userId },
+      { "winners.members": userId },
+    ];
+
+    if (userAttendedIds.length > 0) {
+      orConditions.push({ _id: { $in: userAttendedIds } });
+    }
+
+    if (user?.studentId) {
+      orConditions.push({ "approvedParticipants.studentId": user.studentId });
+      orConditions.push({ "pendingParticipants.leaderStudentId": user.studentId });
+      orConditions.push({ "pendingParticipants.members.studentId": user.studentId });
+    }
+
+    const events = await Event.find({ $or: orConditions })
+      .populate("attendees", "fullName email imageUrl studentId department")
+      .populate("media")
+      .sort({ date: -1 })
+      .lean();
+
     res.status(200).json({ success: true, count: events.length, data: events });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
@@ -70,6 +121,9 @@ export const handleGetEventById = async (req: Request, res: Response) => {
     data.certificates = data.certificates || [];
     data.attendees = data.attendees || [];
     data.tags = data.tags || [];
+    data.rewards = data.rewards || [];
+    data.schedule = data.schedule || [];
+    data.rules = data.rules || [];
 
     res.status(200).json({ success: true, data });
   } catch (error: any) {
@@ -80,8 +134,46 @@ export const handleGetEventById = async (req: Request, res: Response) => {
 
 export const handleUpdateEvent = async (req: Request, res: Response) => {
   try {
-    const updatedEvent = await EventService.updateEvent(req.params.id, req.body);
+    const existingEvent = await Event.findById(req.params.id);
+    if (!existingEvent) return res.status(404).json({ success: false, message: "Event not found" });
+
+    const oldFormId = existingEvent.linkedForm ? existingEvent.linkedForm.toString() : null;
+
+    let updateData = { ...req.body };
+    let shouldUnsetLinkedForm = false;
+
+    if ("linkedForm" in updateData) {
+      if (!updateData.linkedForm || updateData.linkedForm === "" || !mongoose.Types.ObjectId.isValid(updateData.linkedForm)) {
+        shouldUnsetLinkedForm = true;
+        delete updateData.linkedForm;
+      }
+    }
+
+    let updatedEvent;
+    if (shouldUnsetLinkedForm) {
+      updatedEvent = await Event.findByIdAndUpdate(
+        req.params.id,
+        { ...updateData, $unset: { linkedForm: 1 } },
+        { new: true, runValidators: true }
+      );
+    } else {
+      updatedEvent = await EventService.updateEvent(req.params.id, updateData);
+    }
+
     if (!updatedEvent) return res.status(404).json({ success: false, message: "Event not found" });
+
+    const newFormId = updatedEvent.linkedForm ? updatedEvent.linkedForm.toString() : null;
+
+    // Two-way sync: If linkedForm changed
+    if (oldFormId && oldFormId !== newFormId) {
+      // Unlink previous form -> make it independent again
+      await FormModel.findByIdAndUpdate(oldFormId, { $unset: { eventId: 1 } });
+    }
+    if (newFormId && oldFormId !== newFormId) {
+      // Link new form to this event
+      await FormModel.findByIdAndUpdate(newFormId, { eventId: updatedEvent._id });
+    }
+
     res.status(200).json({ success: true, data: updatedEvent });
   } catch (error: any) {
     res.status(400).json({ success: false, message: error.message });
@@ -90,8 +182,15 @@ export const handleUpdateEvent = async (req: Request, res: Response) => {
 
 export const handleDeleteEvent = async (req: Request, res: Response) => {
   try {
+    const event = await Event.findById(req.params.id);
+    if (!event) return res.status(404).json({ success: false, message: "Event not found" });
+
+    // Two-way sync: If event had a linkedForm, release the form so it becomes independent again
+    if (event.linkedForm) {
+      await FormModel.findByIdAndUpdate(event.linkedForm, { $unset: { eventId: 1 } });
+    }
+
     const deletedEvent = await EventService.deleteEvent(req.params.id);
-    if (!deletedEvent) return res.status(404).json({ success: false, message: "Event not found" });
     res.status(200).json({ success: true, message: "Event deleted successfully" });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
@@ -101,58 +200,325 @@ export const handleDeleteEvent = async (req: Request, res: Response) => {
 // ── Participant Management ─────────────────────────────────────────────────
 
 /**
- * @desc  Add a user to pending participants (self-register or admin-add)
+ * @desc  Add participant / team to pending list
  * @route POST /api/events/:id/participants/register
  */
 export const registerParticipant = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { userId, formData } = req.body;
-    if (!userId) return res.status(400).json({ success: false, message: "userId is required" });
+    const {
+      userId,
+      teamName,
+      leaderName,
+      leaderEmail,
+      leaderPhone,
+      leaderStudentId,
+      inGameId,
+      members,
+      formData,
+    } = req.body;
 
     const event = await Event.findById(req.params.id);
     if (!event) return res.status(404).json({ success: false, message: "Event not found" });
 
-    // Check not already attendee or pending
-    const alreadyAttendee = event.attendees.some((id) => id.toString() === userId);
-    const alreadyPending = event.pendingParticipants.some((p) => p.userId.toString() === userId);
-    if (alreadyAttendee || alreadyPending) {
-      return res.status(400).json({ success: false, message: "User already registered or pending" });
+    // Check registration deadline
+    if (event.registrationDeadline && new Date() > new Date(event.registrationDeadline)) {
+      return res.status(400).json({
+        success: false,
+        message: "Registration for this event is closed as the deadline has passed.",
+      });
     }
 
-    event.pendingParticipants.push({ userId, registeredAt: new Date(), formData });
+    // Check participant capacity
+    const totalCurrent = (event.attendees?.length || 0) + (event.pendingParticipants?.length || 0);
+    if (event.maxParticipants && totalCurrent >= event.maxParticipants) {
+      return res.status(400).json({
+        success: false,
+        message: "Registration limit reached. This event is fully booked.",
+      });
+    }
+
+    // Team registration validation
+    if (event.registrationType === "team" || teamName) {
+      const cleanTeamName = (teamName || "").trim();
+      if (!cleanTeamName) {
+        return res.status(400).json({ success: false, message: "Team name is required for team events." });
+      }
+
+      const duplicate = event.pendingParticipants.some(
+        (p) => p.teamName && p.teamName.toLowerCase() === cleanTeamName.toLowerCase()
+      );
+      if (duplicate) {
+        return res.status(400).json({
+          success: false,
+          message: `Team "${cleanTeamName}" has already been submitted for this event.`,
+        });
+      }
+
+      event.pendingParticipants.push({
+        userId: userId && mongoose.Types.ObjectId.isValid(userId) ? userId : undefined,
+        teamName: cleanTeamName,
+        leaderName: (leaderName || "").trim(),
+        leaderEmail: (leaderEmail || "").trim(),
+        leaderPhone: (leaderPhone || "").trim(),
+        leaderStudentId: (leaderStudentId || "").trim(),
+        inGameId: (inGameId || "").trim(),
+        members: Array.isArray(members) ? members : [],
+        registeredAt: new Date(),
+        formData: formData || req.body,
+      });
+
+      await event.save();
+
+      return res.status(200).json({
+        success: true,
+        message: `Team "${cleanTeamName}" registration submitted successfully! Pending admin confirmation.`,
+      });
+    }
+
+    // Individual registration validation
+    const resolvedUserId = userId || (req as any).user?.id;
+    const registrantEmail = leaderEmail || (req as any).user?.email;
+
+    if (resolvedUserId) {
+      const alreadyAttendee = event.attendees.some((id) => id.toString() === resolvedUserId.toString());
+      const alreadyPending = event.pendingParticipants.some(
+        (p) => p.userId && p.userId.toString() === resolvedUserId.toString()
+      );
+      if (alreadyAttendee || alreadyPending) {
+        return res.status(400).json({ success: false, message: "You are already registered or pending approval." });
+      }
+    }
+
+    event.pendingParticipants.push({
+      userId: resolvedUserId && mongoose.Types.ObjectId.isValid(resolvedUserId) ? resolvedUserId : undefined,
+      leaderName: (leaderName || "").trim(),
+      leaderEmail: (registrantEmail || "").trim(),
+      leaderPhone: (leaderPhone || "").trim(),
+      leaderStudentId: (leaderStudentId || "").trim(),
+      inGameId: (inGameId || "").trim(),
+      registeredAt: new Date(),
+      formData: formData || req.body,
+    });
+
     await event.save();
 
-    res.status(200).json({ success: true, message: "Registration submitted, pending approval." });
+    res.status(200).json({
+      success: true,
+      message: "Registration submitted successfully! You will receive an email once approved.",
+    });
   } catch (error) { next(error); }
 };
 
 /**
- * @desc  Approve a pending participant → moves to attendees, updates user profile
+ * @desc  Approve a pending participant / team → moves to attendees & sends confirmation email
  * @route PATCH /api/events/:id/participants/:userId/approve
  */
 export const approveParticipant = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { id: eventId, userId } = req.params;
+    const { id: eventId, userId: targetId } = req.params;
 
     const event = await Event.findById(eventId);
     if (!event) return res.status(404).json({ success: false, message: "Event not found" });
 
-    const pendingIdx = event.pendingParticipants.findIndex((p) => p.userId.toString() === userId);
-    if (pendingIdx === -1) return res.status(404).json({ success: false, message: "Pending participant not found" });
-
-    // Move from pending to attendees
-    event.pendingParticipants.splice(pendingIdx, 1);
-    if (!event.attendees.some((id) => id.toString() === userId)) {
-      event.attendees.push(userId as any);
+    // Match either pending participant _id OR userId
+    const pendingIdx = event.pendingParticipants.findIndex(
+      (p: any) => p._id?.toString() === targetId || p.userId?.toString() === targetId
+    );
+    if (pendingIdx === -1) {
+      return res.status(404).json({ success: false, message: "Pending registration not found." });
     }
+
+    const participant = event.pendingParticipants[pendingIdx];
+
+    // Remove from pending
+    event.pendingParticipants.splice(pendingIdx, 1);
+
+    // Save to approvedParticipants array (preserves non-members, captains, and squad rosters)
+    if (participant.teamName || (participant.members && participant.members.length > 0)) {
+      // Add team leader
+      event.approvedParticipants.push({
+        userId: participant.userId,
+        fullName: participant.leaderName || participant.teamName || "Team Captain",
+        email: participant.leaderEmail || "",
+        studentId: participant.leaderStudentId || "",
+        phone: participant.leaderPhone || "",
+        teamName: participant.teamName,
+        inGameId: participant.inGameId,
+        isTeamLeader: true,
+        approvedAt: new Date(),
+      });
+
+      // Add squad members
+      if (Array.isArray(participant.members)) {
+        for (const m of participant.members) {
+          event.approvedParticipants.push({
+            fullName: m.fullName,
+            email: m.email || "",
+            studentId: m.studentId || "",
+            department: m.department || "",
+            phone: m.phone || "",
+            teamName: participant.teamName,
+            inGameId: m.inGameId,
+            isTeamLeader: false,
+            approvedAt: new Date(),
+          });
+        }
+      }
+    } else {
+      // Individual participant
+      let resolvedName = participant.leaderName;
+      let resolvedEmail = participant.leaderEmail;
+      let resolvedStudentId = participant.leaderStudentId;
+      let resolvedDept = "";
+      let resolvedPhone = participant.leaderPhone;
+
+      if (participant.userId && (!resolvedName || !resolvedEmail)) {
+        const u = await User.findById(participant.userId).select("fullName email studentId department phone");
+        if (u) {
+          resolvedName = resolvedName || u.fullName;
+          resolvedEmail = resolvedEmail || u.email;
+          resolvedStudentId = resolvedStudentId || u.studentId;
+          resolvedDept = u.department || "";
+          resolvedPhone = resolvedPhone || (u as any).phone;
+        }
+      }
+
+      event.approvedParticipants.push({
+        userId: participant.userId,
+        fullName: resolvedName || "Participant",
+        email: resolvedEmail || "",
+        studentId: resolvedStudentId || "",
+        department: resolvedDept,
+        phone: resolvedPhone || "",
+        teamName: participant.teamName,
+        inGameId: participant.inGameId,
+        isTeamLeader: false,
+        approvedAt: new Date(),
+      });
+    }
+
+    // If there is an associated User document, link to attendees
+    if (participant.userId) {
+      if (!event.attendees.some((id) => id.toString() === participant.userId?.toString())) {
+        event.attendees.push(participant.userId as any);
+      }
+      await User.findByIdAndUpdate(participant.userId, {
+        $addToSet: { eventsAttended: eventId },
+      });
+    }
+
     await event.save();
 
-    // Update user's eventsAttended
-    await User.findByIdAndUpdate(userId, {
-      $addToSet: { eventsAttended: eventId },
-    });
+    // Resolve recipient details for email confirmation
+    let recipientEmail = participant.leaderEmail;
+    let recipientName = participant.leaderName || participant.teamName;
 
-    res.status(200).json({ success: true, message: "Participant approved." });
+    if (!recipientEmail && participant.userId) {
+      const user = await User.findById(participant.userId);
+      if (user) {
+        recipientEmail = user.email;
+        recipientName = recipientName || user.fullName;
+      }
+    }
+
+    // Send confirmation email asynchronously
+    if (recipientEmail) {
+      try {
+        const formattedDate = new Date(event.date).toLocaleDateString("en-US", {
+          weekday: "long",
+          month: "long",
+          day: "numeric",
+          year: "numeric",
+        });
+
+        const emailHtml = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8f8f6; color: #1a1a1a; margin: 0; padding: 24px; }
+    .card { max-width: 600px; margin: 0 auto; background: #ffffff; border: 2px solid #1a1a1a; border-radius: 12px; box-shadow: 6px 6px 0px #1a1a1a; overflow: hidden; }
+    .header { background: #0f766e; color: #ffffff; padding: 24px; text-align: center; }
+    .header h1 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.5px; }
+    .badge { display: inline-block; background: #ffffff; color: #0f766e; font-size: 11px; font-weight: 700; text-transform: uppercase; padding: 4px 10px; border-radius: 9999px; margin-bottom: 12px; }
+    .content { padding: 28px; }
+    .details { background: #f3f4f6; border-radius: 8px; border: 1px solid #e5e7eb; padding: 18px; margin: 20px 0; }
+    .details-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
+    .label { color: #6b7280; font-weight: 600; }
+    .val { color: #111827; font-weight: 700; }
+    .members-list { margin: 12px 0 0 0; padding-left: 20px; font-size: 13px; color: #374151; }
+    .footer { text-align: center; padding: 20px; font-size: 12px; color: #6b7280; border-top: 1px solid #e5e7eb; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <div class="badge">Official Registration Confirmation</div>
+      <h1>${event.title}</h1>
+    </div>
+    <div class="content">
+      <p style="font-size: 16px;">Hello <strong>${recipientName || "Participant"}</strong>,</p>
+      <p style="color: #374151; line-height: 1.6;">
+        Congratulations! Your registration for <strong>${event.title}</strong> has been officially approved by the MEC Computer Club administration.
+      </p>
+
+      ${participant.teamName ? `
+        <div style="background: #eef2ff; border-left: 4px solid #6366f1; padding: 12px 16px; border-radius: 4px; margin: 16px 0;">
+          <strong style="color: #3730a3; font-size: 14px;">Registered Team: ${participant.teamName}</strong>
+          ${participant.members && participant.members.length > 0 ? `
+            <ul class="members-list">
+              <li>Leader: ${participant.leaderName || recipientName} ${participant.inGameId ? `(UID: ${participant.inGameId})` : ""}</li>
+              ${participant.members.map((m: any) => `<li>${m.fullName} ${m.studentId ? `(${m.studentId})` : ""} ${m.inGameId ? `- UID: ${m.inGameId}` : ""}</li>`).join("")}
+            </ul>
+          ` : ""}
+        </div>
+      ` : ""}
+
+      <div class="details">
+        <div class="details-row">
+          <span class="label">Date:</span>
+          <span class="val">${formattedDate}</span>
+        </div>
+        ${event.eventTime ? `
+        <div class="details-row">
+          <span class="label">Time:</span>
+          <span class="val">${event.eventTime}</span>
+        </div>` : ""}
+        <div class="details-row">
+          <span class="label">Venue / Location:</span>
+          <span class="val">${event.location}</span>
+        </div>
+        ${event.prizePool ? `
+        <div class="details-row">
+          <span class="label">Prize Pool:</span>
+          <span class="val" style="color: #059669;">${event.prizePool}</span>
+        </div>` : ""}
+      </div>
+
+      <p style="color: #4b5563; font-size: 14px; line-height: 1.5;">
+        Please make sure all participants arrive on time. For any queries, reach out to us at 
+        <a href="mailto:${event.contactEmail || "contact@meccomputerclub.org"}" style="color: #0f766e; font-weight: 600;">${event.contactEmail || "contact@meccomputerclub.org"}</a>.
+      </p>
+    </div>
+    <div class="footer">
+      &copy; ${new Date().getFullYear()} MEC Computer Club &bull; Mymensingh Engineering College
+    </div>
+  </div>
+</body>
+</html>
+        `;
+
+        await sendEmail(recipientEmail, `Registration Confirmed: ${event.title} - MEC-CC`, emailHtml);
+      } catch (mailErr) {
+        console.error("Failed to send approval email (non-fatal):", mailErr);
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Registration approved for ${recipientName || "participant"}. Confirmation email dispatched.`,
+    });
   } catch (error) { next(error); }
 };
 
@@ -162,17 +528,17 @@ export const approveParticipant = async (req: Request, res: Response, next: Next
  */
 export const rejectParticipant = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { id: eventId, userId } = req.params;
+    const { id: eventId, userId: targetId } = req.params;
 
     const event = await Event.findById(eventId);
     if (!event) return res.status(404).json({ success: false, message: "Event not found" });
 
     event.pendingParticipants = event.pendingParticipants.filter(
-      (p) => p.userId.toString() !== userId
+      (p: any) => p._id?.toString() !== targetId && p.userId?.toString() !== targetId
     ) as any;
     await event.save();
 
-    res.status(200).json({ success: true, message: "Participant rejected." });
+    res.status(200).json({ success: true, message: "Participant registration rejected." });
   } catch (error) { next(error); }
 };
 
@@ -182,24 +548,54 @@ export const rejectParticipant = async (req: Request, res: Response, next: NextF
  */
 export const addAttendee = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { userIds } = req.body; // array of user IDs
-    if (!Array.isArray(userIds) || userIds.length === 0) {
-      return res.status(400).json({ success: false, message: "userIds array is required" });
+    const { userIds, nonMembers } = req.body;
+    if ((!Array.isArray(userIds) || userIds.length === 0) && (!Array.isArray(nonMembers) || nonMembers.length === 0)) {
+      return res.status(400).json({ success: false, message: "userIds or nonMembers array is required" });
     }
 
     const event = await Event.findById(req.params.id);
     if (!event) return res.status(404).json({ success: false, message: "Event not found" });
 
-    for (const userId of userIds) {
-      if (!event.attendees.some((id) => id.toString() === userId)) {
-        event.attendees.push(userId);
+    if (Array.isArray(userIds)) {
+      for (const userId of userIds) {
+        if (!event.attendees.some((id) => id.toString() === userId)) {
+          event.attendees.push(userId);
+        }
+        const u = await User.findById(userId).select("fullName email studentId department phone");
+        if (u && !event.approvedParticipants.some((ap) => ap.userId?.toString() === userId)) {
+          event.approvedParticipants.push({
+            userId: u._id,
+            fullName: u.fullName,
+            email: u.email,
+            studentId: u.studentId,
+            department: u.department,
+            phone: (u as any).phone,
+            approvedAt: new Date(),
+          });
+        }
+        // Update user profile
+        await User.findByIdAndUpdate(userId, { $addToSet: { eventsAttended: req.params.id } });
       }
-      // Update user profile
-      await User.findByIdAndUpdate(userId, { $addToSet: { eventsAttended: req.params.id } });
     }
+
+    if (Array.isArray(nonMembers)) {
+      for (const nm of nonMembers) {
+        if (nm && nm.fullName && nm.email) {
+          event.approvedParticipants.push({
+            fullName: nm.fullName.trim(),
+            email: nm.email.trim(),
+            studentId: nm.studentId?.trim(),
+            department: nm.department?.trim(),
+            phone: nm.phone?.trim(),
+            approvedAt: new Date(),
+          });
+        }
+      }
+    }
+
     await event.save();
 
-    res.status(200).json({ success: true, message: `${userIds.length} attendee(s) added.` });
+    res.status(200).json({ success: true, message: "Attendee(s) added successfully." });
   } catch (error) { next(error); }
 };
 
@@ -211,8 +607,20 @@ export const removeAttendee = async (req: Request, res: Response, next: NextFunc
   try {
     const { id: eventId, userId } = req.params;
 
-    await Event.findByIdAndUpdate(eventId, { $pull: { attendees: userId } });
-    await User.findByIdAndUpdate(userId, { $pull: { eventsAttended: eventId } });
+    await Event.findByIdAndUpdate(eventId, {
+      $pull: {
+        attendees: userId,
+        approvedParticipants: {
+          $or: [
+            { userId: mongoose.Types.ObjectId.isValid(userId) ? userId : undefined },
+            { _id: mongoose.Types.ObjectId.isValid(userId) ? userId : undefined },
+          ],
+        },
+      },
+    });
+    if (mongoose.Types.ObjectId.isValid(userId)) {
+      await User.findByIdAndUpdate(userId, { $pull: { eventsAttended: eventId } });
+    }
 
     res.status(200).json({ success: true, message: "Attendee removed." });
   } catch (error) { next(error); }
@@ -349,6 +757,41 @@ export const removeEventMedia = async (req: Request, res: Response, next: NextFu
   } catch (error) { next(error); }
 };
 
+/**
+ * @desc  Get all event media items for the public gallery
+ * @route GET /api/events/media/gallery
+ */
+export const getGalleryMedia = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { type, eventId } = req.query;
+    const filter: any = {};
+    if (type && type !== "all") {
+      filter.mediaType = type;
+    }
+    if (eventId) {
+      filter.relatedEvent = eventId;
+    }
+
+    const page = parseInt(String(req.query.page || "1"), 10);
+    const limit = parseInt(String(req.query.limit || "0"), 10);
+
+    let query = Media.find(filter)
+      .populate("relatedEvent", "title slug date category location")
+      .sort({ createdAt: -1 });
+
+    if (limit > 0) {
+      query = query.skip((Math.max(1, page) - 1) * limit).limit(limit);
+    }
+
+    const mediaList = await query.lean();
+
+    res.status(200).json({ success: true, count: mediaList.length, data: mediaList });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
 // ── Certificates ───────────────────────────────────────────────────────────
 
 /**
@@ -358,7 +801,7 @@ export const removeEventMedia = async (req: Request, res: Response, next: NextFu
  */
 export const issueCertificates = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { recipients, name, description, issueDate, digitalUrl } = req.body;
+    const { recipients, name, description, issueDate, digitalUrl, templateId, template } = req.body;
     const adminId = (req as any).user?.id;
 
     if (!Array.isArray(recipients) || recipients.length === 0) {
@@ -368,30 +811,41 @@ export const issueCertificates = async (req: Request, res: Response, next: NextF
     const event = await Event.findById(req.params.id);
     if (!event) return res.status(404).json({ success: false, message: "Event not found" });
 
+    const finalTemplateId = templateId || template;
     const created: any[] = [];
 
     for (const r of recipients) {
       // Generate unique certificate ID
       const certId = `MCC-${new Date(issueDate || Date.now()).getFullYear()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
 
+      const isUserIdValid = r.userId && mongoose.Types.ObjectId.isValid(r.userId);
+
       const cert = await Certificate.create({
         name: name || `${event.title} Certificate`,
         description: description || `Awarded for participation in ${event.title}`,
-        recipient: r.userId,
+        recipient: isUserIdValid ? r.userId : undefined,
+        recipientName: r.fullName || r.name,
+        recipientEmail: r.email,
+        recipientStudentId: r.studentId,
+        recipientDepartment: r.department,
         associatedEvent: req.params.id,
+        template: finalTemplateId || undefined,
         issueDate: issueDate ? new Date(issueDate) : new Date(),
         certificateId: certId,
-        digitalUrl: r.digitalUrl || digitalUrl || "",
+        digitalUrl: r.digitalUrl || digitalUrl || `/verify?cert=${certId}`,
         type: r.type || "participation",
         position: r.position,
         issuedBy: adminId,
+        status: "valid",
       });
 
       // Link certificate to event
       await Event.findByIdAndUpdate(req.params.id, { $addToSet: { certificates: cert._id } });
 
-      // Link certificate to user profile
-      await User.findByIdAndUpdate(r.userId, { $addToSet: { certificates: cert._id } });
+      // Link certificate to user profile if member
+      if (isUserIdValid) {
+        await User.findByIdAndUpdate(r.userId, { $addToSet: { certificates: cert._id } });
+      }
 
       created.push(cert);
     }
@@ -411,9 +865,21 @@ export const issueCertificates = async (req: Request, res: Response, next: NextF
 export const getEventCertificates = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const certs = await Certificate.find({ associatedEvent: req.params.id })
-      .populate("recipient", "fullName email imageUrl studentId")
+      .populate("recipient", "fullName email imageUrl studentId department batch session")
+      .populate("template")
       .sort({ createdAt: -1 })
       .lean();
-    res.status(200).json({ success: true, data: certs });
+
+    const mapped = certs.map((c: any) => ({
+      ...c,
+      recipient: c.recipient || {
+        fullName: c.recipientName || "Participant",
+        email: c.recipientEmail || "",
+        studentId: c.recipientStudentId || "",
+        department: c.recipientDepartment || "",
+      },
+    }));
+
+    res.status(200).json({ success: true, data: mapped });
   } catch (error) { next(error); }
 };

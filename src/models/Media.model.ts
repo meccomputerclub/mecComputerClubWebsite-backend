@@ -63,5 +63,9 @@ const MediaSchema: Schema = new Schema(
   }
 );
 
+MediaSchema.index({ createdAt: -1 });
+MediaSchema.index({ mediaType: 1, createdAt: -1 });
+MediaSchema.index({ relatedEvent: 1, mediaType: 1 });
+
 // 3. Export the Model
 export const Media = mongoose.model<IMedia>("Media", MediaSchema);

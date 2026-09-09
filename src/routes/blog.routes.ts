@@ -1,13 +1,27 @@
 import { Router } from "express";
 import { authMiddleware } from "../middlewares/auth.middleware";
-import { createBlog, getAllBlogs, getBlogById, updateBlog, deleteBlog } from "../controllers/blog.controller";
+import {
+  createBlog,
+  getAllBlogs,
+  getBlogById,
+  getBlogBySlug,
+  getMyBlogs,
+  updateBlog,
+  deleteBlog,
+  toggleBlogLike,
+  toggleFeaturedBlog,
+} from "../controllers/blog.controller";
 
 const router = Router();
 
 router.get("/", getAllBlogs);
+router.get("/my", authMiddleware(), getMyBlogs);
+router.get("/slug/:slug", getBlogBySlug);
 router.get("/:id", getBlogById);
-router.post("/", authMiddleware(["admin", "moderator"]), createBlog);
-router.patch("/:id", authMiddleware(["admin", "moderator"]), updateBlog);
-router.delete("/:id", authMiddleware(["admin", "moderator"]), deleteBlog);
+router.post("/:id/like", authMiddleware(), toggleBlogLike);
+router.post("/", authMiddleware(["admin", "moderator", "member", "executive", "alumni"]), createBlog);
+router.patch("/:id/featured", authMiddleware(["admin", "moderator"]), toggleFeaturedBlog);
+router.patch("/:id", authMiddleware(), updateBlog);
+router.delete("/:id", authMiddleware(), deleteBlog);
 
 export default router;

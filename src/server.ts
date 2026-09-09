@@ -10,7 +10,16 @@ const start = async () => {
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 };
 
-start().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// If not on Vercel serverless, run normal standalone listener
+if (!process.env.VERCEL) {
+  start().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}
+
+// Serverless handler for Vercel deployment
+export default async function handler(req: any, res: any) {
+  await connectDB();
+  return (app as any)(req, res);
+}

@@ -10,9 +10,10 @@ import {
   // Sponsors
   addEventSponsor, removeEventSponsor,
   // Media
-  uploadEventMedia, removeEventMedia,
+  uploadEventMedia, removeEventMedia, getGalleryMedia,
   // Certificates
   issueCertificates, getEventCertificates,
+  getMyEvents,
 } from "../controllers/event.controller";
 import { authMiddleware } from "../middlewares/auth.middleware";
 import { createUploader } from "../config/multer.config";
@@ -21,8 +22,10 @@ const router = Router();
 const upload = createUploader("event_media");
 
 // ── Basic CRUD ──────────────────────────────────────────────────────────────
+router.get("/my-events", authMiddleware(), getMyEvents);
 router.post("/", authMiddleware(["admin", "moderator"]), handleCreateEvent);
 router.get("/", handleGetEvents);
+router.get("/media/gallery", getGalleryMedia);
 router.get("/:id", handleGetEventById);
 router.patch("/:id", authMiddleware(["admin", "moderator"]), handleUpdateEvent);
 router.delete("/:id", authMiddleware(["admin", "moderator"]), handleDeleteEvent);

@@ -4,6 +4,7 @@ import { Request, Response } from "express";
 import { sendEmail } from "../utils/sendEmail";
 import UserModel from "../models/User.model";
 import { generateEmail } from "../utils/generateEmailTemplate";
+import mongoose from "mongoose";
 
 /**
  * Create & Dispatch Invitation Code
@@ -231,10 +232,12 @@ export const updateInvitationStatus = async (req: Request, res: Response) => {
     }
 
     let targetInvite = null;
-    if (id) {
+    if (id && mongoose.Types.ObjectId.isValid(id)) {
       targetInvite = await InvitationCode.findById(id);
-    } else if (code) {
-      targetInvite = await InvitationCode.findOne({ code: code.toString().trim().toUpperCase() });
+    }
+    if (!targetInvite && (id || code)) {
+      const searchCode = (code || id).toString().trim().toUpperCase();
+      targetInvite = await InvitationCode.findOne({ code: searchCode });
     }
 
     if (!targetInvite) {
@@ -267,27 +270,52 @@ export const updateInvitationStatus = async (req: Request, res: Response) => {
 };
 
 /**
- * Delete / Remove Invitation Code (Admin / Moderator)
+ * Delete / Remove Invitation Code (Admin / Moderator / Executive)
  */
 export const deleteInvitationCode = async (req: Request, res: Response) => {
   try {
-    const { id } = req.params;
-    const { email, code } = req.query;
+    const rawId = req.params.id || (req.query.id as string) || (req.body?.id as string) || "";
+    const rawCode = (req.query.code as string) || (req.body?.code as string) || "";
+    const rawEmail = (req.query.email as string) || (req.body?.email as string) || "";
 
     let targetInvite = null;
-    if (id) {
-      targetInvite = await InvitationCode.findById(id);
-    } else if (code) {
-      targetInvite = await InvitationCode.findOne({ code: code.toString().trim().toUpperCase() });
-    } else if (email) {
-      targetInvite = await InvitationCode.findOne({ email: email.toString().toLowerCase().trim() });
+
+    // 1. Try finding by MongoDB ObjectId if valid
+    if (rawId && mongoose.Types.ObjectId.isValid(rawId)) {
+      targetInvite = await InvitationCode.findById(rawId);
+    }
+
+    // 2. Try finding by code string (rawId could be the code, e.g. "MEC-26")
+    if (!targetInvite && rawId) {
+      targetInvite = await InvitationCode.findOne({
+        code: rawId.toString().trim().toUpperCase(),
+      });
+    }
+
+    // 3. Try finding by explicit code param
+    if (!targetInvite && rawCode) {
+      targetInvite = await InvitationCode.findOne({
+        code: rawCode.toString().trim().toUpperCase(),
+      });
+    }
+
+    // 4. Try finding by email
+    if (!targetInvite && rawEmail) {
+      targetInvite = await InvitationCode.findOne({
+        email: rawEmail.toString().toLowerCase().trim(),
+      });
     }
 
     if (!targetInvite) {
-      if (email) {
-        const cleanEmail = email.toString().toLowerCase().trim();
-        await InvitationCode.deleteMany({ email: cleanEmail });
-        return res.json({ success: true, message: `Invitations for "${cleanEmail}" deleted.` });
+      if (rawEmail) {
+        const cleanEmail = rawEmail.toString().toLowerCase().trim();
+        const deleteResult = await InvitationCode.deleteMany({ email: cleanEmail });
+        if (deleteResult.deletedCount > 0) {
+          return res.json({
+            success: true,
+            message: `Removed ${deleteResult.deletedCount} invitation(s) for "${cleanEmail}".`,
+          });
+        }
       }
       return res.status(404).json({ success: false, message: "Invitation code not found." });
     }
@@ -435,8 +463,15 @@ export const verifyInvitationCode = async (req: Request, res: Response) => {
       });
     }
 
-    // Set clearance cookie
+    // Set clearance cookies
     res.cookie("invitation_validated", "358", {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 30 * 60 * 1000, // 30 minutes
+      path: "/",
+    });
+    res.cookie("invitation_code", invite.code, {
       httpOnly: true,
       sameSite: "lax",
       secure: process.env.NODE_ENV === "production",
@@ -473,13 +508,17 @@ export const consumeInvitationCode = async (req: Request, res: Response) => {
     const cleanCode = (code || "").toString().trim().toUpperCase();
     const invite = await InvitationCode.findOne({ code: cleanCode });
 
-    if (!invite) return res.status(404).json({ message: "Invalid code" });
+    if (!invite) return res.status(404).json({ success: false, message: "Invalid code" });
 
     // Permanent codes don't become consumed, they just increment usage
     if (invite.codeType === "permanent") {
       invite.usageCount = (invite.usageCount || 0) + 1;
       await invite.save();
       return res.json({ success: true, message: "Permanent code usage recorded successfully" });
+    }
+
+    if (invite.status === "consumed") {
+      return res.status(400).json({ success: false, message: "This single-use code is already consumed." });
     }
 
     invite.status = "consumed";

@@ -13,7 +13,15 @@ export const getAllEvents = async (filter: FilterQuery<IEvent> = {}) => {
 };
 
 export const getEventById = async (id: string) => {
-  return await Event.findById(id).populate("attendees media projects");
+  return await Event.findById(id)
+    .populate("attendees media projects forms linkedForm")
+    .populate({
+      path: "certificates",
+      populate: [
+        { path: "recipient", select: "fullName email studentId department batch imageUrl" },
+        { path: "template" },
+      ],
+    });
 };
 
 export const updateEvent = async (id: string, updateData: UpdateQuery<IEvent>) => {

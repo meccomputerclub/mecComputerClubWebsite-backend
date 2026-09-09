@@ -2,6 +2,27 @@ import mongoose, { Document, Schema } from "mongoose";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
 
+export interface IUserExperience {
+  companyName: string;
+  jobTitle: string;
+  startDate: string;
+  endDate?: string;
+  isCurrent?: boolean;
+  location?: string;
+  description?: string;
+}
+
+export interface IUserEducation {
+  institution: string;
+  degree: string;
+  fieldOfStudy?: string;
+  startDate?: string;
+  endDate?: string;
+  isCurrent?: boolean;
+  location?: string;
+  description?: string;
+}
+
 export interface IUser extends Document {
   email: string;
   password: string;
@@ -28,8 +49,15 @@ export interface IUser extends Document {
   bio?: string;
   imageUrl?: string;
   imagePublicId?: string;
+  imagePosition?: string;
   coverUrl?: string;
   coverPublicId?: string;
+  coverPosition?: string;
+
+  skills?: string[];
+  website?: string;
+  experiences?: IUserExperience[];
+  education?: IUserEducation[];
 
   socialLinks?: {
     facebook?: string;
@@ -99,8 +127,36 @@ const userSchema: Schema<IUser> = new Schema(
     bio: String,
     imageUrl: { type: String, default: "" },
     imagePublicId: String,
+    imagePosition: { type: String, default: "50% 50%" },
     coverUrl: { type: String, default: null },
     coverPublicId: String,
+    coverPosition: { type: String, default: "50% 50%" },
+
+    skills: { type: [String], default: [] },
+    website: { type: String, default: "" },
+    experiences: [
+      {
+        companyName: { type: String, required: true, trim: true },
+        jobTitle: { type: String, required: true, trim: true },
+        startDate: { type: String, required: true, trim: true },
+        endDate: { type: String, default: "", trim: true },
+        isCurrent: { type: Boolean, default: false },
+        location: { type: String, default: "", trim: true },
+        description: { type: String, default: "", trim: true },
+      },
+    ],
+    education: [
+      {
+        institution: { type: String, required: true, trim: true },
+        degree: { type: String, required: true, trim: true },
+        fieldOfStudy: { type: String, default: "", trim: true },
+        startDate: { type: String, default: "", trim: true },
+        endDate: { type: String, default: "", trim: true },
+        isCurrent: { type: Boolean, default: false },
+        location: { type: String, default: "", trim: true },
+        description: { type: String, default: "", trim: true },
+      },
+    ],
 
     socialLinks: {
       facebook: String,
@@ -151,6 +207,11 @@ const userSchema: Schema<IUser> = new Schema(
   },
   { timestamps: true }
 );
+
+userSchema.index({ profileStatus: 1, applicationStatus: 1 });
+userSchema.index({ profileStatus: 1, applicationStatus: 1, clubRole: 1 });
+userSchema.index({ profileStatus: 1, applicationStatus: 1, role: 1 });
+userSchema.index({ "cpProfile.rating": -1 });
 
 // password hashing
 userSchema.pre<IUser>("save", async function (next) {

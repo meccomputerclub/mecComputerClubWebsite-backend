@@ -3,14 +3,20 @@ import mongoose, { Schema, Document } from "mongoose";
 // 1. Define the Interface (for TypeScript)
 export interface IProject extends Document {
   title: string;
+  slug?: string;
   description: string;
   status: "planning" | "in_progress" | "completed" | "on_hold" | "archived";
-  startDate: Date;
-  endDate?: Date; // Optional for in-progress projects
+  startDate?: Date;
+  endDate?: Date;
   githubLink?: string;
   liveDemoLink?: string;
-  teamMembers: mongoose.Types.ObjectId[]; // Reference to Users who participated
+  teamMembers: mongoose.Types.ObjectId[];
+  createdBy?: mongoose.Types.ObjectId;
+  department?: string;
   requiredSkills: string[];
+  techStack?: string[];
+  imageUrl?: string;
+  featured?: boolean;
 }
 
 // 2. Define the Mongoose Schema
@@ -32,9 +38,13 @@ const ProjectSchema: Schema = new Schema(
       default: "planning",
       required: true,
     },
+    slug: {
+      type: String,
+      trim: true,
+    },
     startDate: {
       type: Date,
-      required: [true, "Project start date is required"],
+      default: Date.now,
     },
     endDate: {
       type: Date,
@@ -43,10 +53,12 @@ const ProjectSchema: Schema = new Schema(
     githubLink: {
       type: String,
       required: false,
+      default: "",
     },
     liveDemoLink: {
       type: String,
       required: false,
+      default: "",
     },
     teamMembers: [
       {
@@ -54,15 +66,39 @@ const ProjectSchema: Schema = new Schema(
         ref: "User", // Links to your User model
       },
     ],
+    createdBy: {
+      type: Schema.Types.ObjectId,
+      ref: "User",
+    },
+    department: {
+      type: String,
+      default: "webdev",
+    },
     requiredSkills: {
-      type: [String], // e.g., ['Node.js', 'React', 'MongoDB']
+      type: [String],
       default: [],
+    },
+    techStack: {
+      type: [String],
+      default: [],
+    },
+    imageUrl: {
+      type: String,
+      default: "",
+    },
+    featured: {
+      type: Boolean,
+      default: false,
+      index: true,
     },
   },
   {
     timestamps: true, // Adds createdAt and updatedAt fields
   }
 );
+
+ProjectSchema.index({ featured: -1, createdAt: -1 });
+ProjectSchema.index({ department: 1, createdAt: -1 });
 
 // 3. Export the Model
 export const Project = mongoose.model<IProject>("Project", ProjectSchema);

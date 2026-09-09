@@ -68,6 +68,92 @@ export const submitForm = async (req: Request, res: Response, next: NextFunction
       responses,
     });
 
+    // If form is associated with an event, register into event.pendingParticipants
+    if (form.eventId) {
+      try {
+        const { Event } = await import("../models/Event.model");
+        const event = await Event.findById(form.eventId);
+        if (event) {
+          const leaderName =
+            responses?.full_name ||
+            responses?.fullName ||
+            responses?.name ||
+            responses?.leader_name ||
+            responses?.captain_name ||
+            responses?.applicant_name ||
+            req?.user?.fullName ||
+            "Participant";
+          const leaderEmail =
+            responses?.email_address ||
+            responses?.email ||
+            responses?.contact_email ||
+            req?.user?.email ||
+            "";
+          const leaderPhone =
+            responses?.phone ||
+            responses?.phone_number ||
+            responses?.contact_phone ||
+            responses?.mobile ||
+            "";
+          const leaderStudentId =
+            responses?.student_id ||
+            responses?.studentId ||
+            responses?.id_number ||
+            "";
+          const teamName =
+            responses?.team_name ||
+            responses?.teamName ||
+            responses?.squad_name ||
+            undefined;
+          const inGameId =
+            responses?.in_game_id ||
+            responses?.inGameId ||
+            responses?.uid ||
+            undefined;
+
+          // Parse members if any (e.g. member_2_name, player_2, etc.)
+          const members: any[] = [];
+          for (let i = 2; i <= 10; i++) {
+            const mName = responses?.[`member_${i}_name`] || responses?.[`player_${i}_name`];
+            if (mName) {
+              members.push({
+                fullName: mName,
+                studentId: responses?.[`member_${i}_id`] || responses?.[`player_${i}_id`] || "",
+                inGameId: responses?.[`member_${i}_uid`] || responses?.[`player_${i}_uid`] || "",
+                email: responses?.[`member_${i}_email`] || "",
+                phone: responses?.[`member_${i}_phone`] || "",
+              });
+            }
+          }
+
+          event.pendingParticipants.push({
+            userId: req?.user?._id as any,
+            teamName,
+            leaderName,
+            leaderEmail,
+            leaderPhone,
+            leaderStudentId,
+            inGameId,
+            members,
+            registeredAt: new Date(),
+            formData: responses,
+          });
+
+          // Ensure form is linked to event
+          if (!event.forms.some((f) => f.toString() === formId)) {
+            event.forms.push(form._id as any);
+          }
+          if (!event.linkedForm) {
+            event.linkedForm = form._id as any;
+          }
+
+          await event.save();
+        }
+      } catch (evErr) {
+        console.warn("Failed to auto-register into event pending participants:", evErr);
+      }
+    }
+
     res.status(201).json({
       success: true,
       message: "Form submitted successfully",

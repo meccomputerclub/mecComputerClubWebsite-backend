@@ -1,23 +1,33 @@
 import { Request, Response, NextFunction } from "express";
+import mongoose from "mongoose";
 import FormModel from "../models/Form.model";
+import { Event } from "../models/Event.model";
 import AppError from "../utils/AppError";
 import { ApiFeatures } from "../utils/apiFeatures";
 import { buildHateoas } from "../utils/hateoas";
 
 /**
- * Create a new form for an event (Admin)
+ * Create a new form for an event or independently (Admin)
  */
 export const createForm = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { title, eventId, description, startDate, endDate, fields, coverImageUrl, allowMultipleSubmissions } = req.body;
 
-    if (!title || !eventId || !fields?.length) {
-      return next(new AppError("Title, eventId and fields are required", 400));
+    if (!title || !fields?.length) {
+      return next(new AppError("Title and fields are required", 400));
     }
+
+    // Clean eventId: if dummy independent ID or invalid, treat as null
+    const validEventId =
+      eventId &&
+      eventId !== "111111111111111111111111" &&
+      mongoose.Types.ObjectId.isValid(eventId)
+        ? eventId
+        : null;
 
     const form = await FormModel.create({
       title,
-      eventId,
+      eventId: validEventId,
       description: description || "",
       coverImageUrl: coverImageUrl || "",
       startDate,
@@ -25,6 +35,11 @@ export const createForm = async (req: Request, res: Response, next: NextFunction
       fields,
       allowMultipleSubmissions: allowMultipleSubmissions !== false, // default true
     });
+
+    // Two-way sync: If created with an associated event, link it to the event automatically
+    if (validEventId) {
+      await Event.findByIdAndUpdate(validEventId, { linkedForm: form._id });
+    }
 
     res.status(201).json({
       success: true,
@@ -138,6 +153,11 @@ export const deleteForm = async (req: Request, res: Response, next: NextFunction
       return next(new AppError("Form not found", 404));
     }
 
+    // Two-way sync: If form was linked to an event, clear the event's linkedForm
+    if (form.eventId) {
+      await Event.findByIdAndUpdate(form.eventId, { $unset: { linkedForm: 1 } });
+    }
+
     res.json({
       success: true,
       message: "Form deleted successfully",
@@ -154,30 +174,49 @@ export const updateForm = async (req: Request, res: Response, next: NextFunction
   try {
     const { title, eventId, description, startDate, endDate, fields, coverImageUrl, allowMultipleSubmissions, isActive } = req.body;
 
-    const form = await FormModel.findByIdAndUpdate(
-      req.params.id,
-      {
-        ...(title !== undefined && { title }),
-        ...(eventId !== undefined && { eventId }),
-        ...(description !== undefined && { description }),
-        ...(coverImageUrl !== undefined && { coverImageUrl }),
-        ...(startDate !== undefined && { startDate }),
-        ...(endDate !== undefined && { endDate }),
-        ...(fields !== undefined && { fields }),
-        ...(allowMultipleSubmissions !== undefined && { allowMultipleSubmissions }),
-        ...(isActive !== undefined && { isActive }),
-      },
-      { new: true, runValidators: true }
-    );
-
-    if (!form) {
+    const existingForm = await FormModel.findById(req.params.id);
+    if (!existingForm) {
       return next(new AppError("Form not found", 404));
+    }
+
+    const validEventId =
+      eventId !== undefined
+        ? eventId &&
+          eventId !== "111111111111111111111111" &&
+          mongoose.Types.ObjectId.isValid(eventId)
+          ? eventId
+          : null
+        : existingForm.eventId;
+
+    const oldEventId = existingForm.eventId ? existingForm.eventId.toString() : null;
+    const newEventId = validEventId ? validEventId.toString() : null;
+
+    if (title !== undefined) existingForm.title = title;
+    existingForm.eventId = validEventId as any;
+    if (description !== undefined) existingForm.description = description;
+    if (coverImageUrl !== undefined) existingForm.coverImageUrl = coverImageUrl;
+    if (startDate !== undefined) existingForm.startDate = startDate;
+    if (endDate !== undefined) existingForm.endDate = endDate;
+    if (fields !== undefined) existingForm.fields = fields;
+    if (allowMultipleSubmissions !== undefined) existingForm.allowMultipleSubmissions = allowMultipleSubmissions;
+    if (isActive !== undefined) existingForm.isActive = isActive;
+
+    await existingForm.save();
+
+    // Two-way sync: Handle event change or unlinking
+    if (oldEventId && oldEventId !== newEventId) {
+      // Unlink previous event
+      await Event.findByIdAndUpdate(oldEventId, { $unset: { linkedForm: 1 } });
+    }
+    if (newEventId && oldEventId !== newEventId) {
+      // Link new event
+      await Event.findByIdAndUpdate(newEventId, { linkedForm: existingForm._id });
     }
 
     res.json({
       success: true,
       message: "Form updated successfully",
-      data: form,
+      data: existingForm,
     });
   } catch (error) {
     next(error);

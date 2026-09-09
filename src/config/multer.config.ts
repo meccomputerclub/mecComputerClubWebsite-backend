@@ -17,10 +17,10 @@ const sanitizeName = (name: string) => {
     .replace(/-{2,}/g, "-");
 };
 
-export const createUploader = (folder: string) => {
+export const createUploader = (defaultFolder: string) => {
   const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
-    params: async (req, file) => {
+    params: async (req: any, file: any) => {
       // Determine the filename (public_id)
       let desiredName = path.parse(file.originalname).name;
 
@@ -32,6 +32,8 @@ export const createUploader = (folder: string) => {
           // fallback to original name
         }
       }
+
+      const folder = req.query?.folder || req.body?.folder || defaultFolder;
 
       return {
         folder: `uploads/${folder}`,
@@ -49,11 +51,12 @@ export const createUploader = (folder: string) => {
   });
 };
 
-export const createFileUploader = (folder: string) => {
+export const createFileUploader = (defaultFolder: string) => {
   const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
-    params: async (req, file) => {
+    params: async (req: any, file: any) => {
       let desiredName = path.parse(file.originalname).name;
+      const folder = req.query?.folder || req.body?.folder || defaultFolder;
 
       return {
         folder: `uploads/${folder}`,
