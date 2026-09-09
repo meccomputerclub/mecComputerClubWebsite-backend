@@ -375,7 +375,7 @@ export const getProfile = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Bad request. Identifier is required." });
     }
 
-    const user = await userService.getUserProfile(identifier);
+    const user = await userService.getPublicUserProfile(identifier);
     res.status(200).json({ success: true, message: "User found", data: user });
   } catch (err: any) {
     const msg: string = err?.message || "An error occurred.";

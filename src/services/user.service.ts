@@ -244,6 +244,20 @@ export const changePassword = async (
   return user;
 };
 
+export const getPublicUserProfile = async (identifier: string) => {
+  let user: IUser | null = null;
+  const projection = "-password -verificationToken -passwordResetToken -contactNumber";
+  if (identifier.match(/^[0-9a-fA-F]{24}$/)) {
+    user = await User.findById(identifier).select(projection);
+  } else if (identifier.includes("@")) {
+    user = await User.findOne({ email: identifier }).select(projection);
+  } else {
+    user = await User.findOne({ studentId: identifier }).select(projection);
+  }
+  if (!user) throw new Error("User not found");
+  return user;
+};
+
 export const getUserProfile = async (identifier: string) => {
   let user: IUser | null = null;
   if (identifier.match(/^[0-9a-fA-F]{24}$/)) {
