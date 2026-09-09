@@ -44,6 +44,7 @@ const frontendUrl = process.env.FRONTEND_URL;
 const allowedOrigins = [
   "https://meccomputerclub.vercel.app",
   "https://www.meccomputerclub.org",
+  "https://meccomputerclub.org",
   "http://localhost:3000",
   "http://localhost:3001",
   "http://127.0.0.1:3000",
