@@ -55,7 +55,11 @@ const allowedOrigins = [
 const corsOptions: CorsOptions = {
   origin: (requestOrigin: string | undefined, callback: any) => {
     if (!requestOrigin) return callback(null, true);
-    if (allowedOrigins.indexOf(requestOrigin) !== -1) {
+    if (
+      allowedOrigins.indexOf(requestOrigin) !== -1 ||
+      /\.vercel\.app$/.test(requestOrigin) ||
+      /\.meccomputerclub\.org$/.test(requestOrigin)
+    ) {
       callback(null, true);
     } else {
       callback(new Error(`Not allowed by CORS policy for origin: ${requestOrigin}`));
