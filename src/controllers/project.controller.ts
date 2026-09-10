@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { Project } from "../models/Project.model";
+import User from "../models/User.model";
 
 function generateSlug(title: string): string {
   const base = title
@@ -49,14 +50,16 @@ export const createProject = async (req: Request, res: Response, next: NextFunct
       ? requiredSkills.split(",").map((s: string) => s.trim()).filter(Boolean)
       : [];
 
-    const memberIds = Array.isArray(teamMembers)
-      ? teamMembers.filter(Boolean)
+    let memberIds = Array.isArray(teamMembers)
+      ? teamMembers.map((m: any) => (typeof m === "object" && m?._id ? String(m._id) : String(m))).filter(Boolean)
       : typeof teamMembers === "string"
       ? teamMembers.split(",").map((s: string) => s.trim()).filter(Boolean)
       : [];
 
-    if (userId && !memberIds.includes(userId)) {
+    if (!isAdmin && userId && !memberIds.includes(userId)) {
       memberIds.unshift(userId);
+    } else if (isAdmin && memberIds.length === 0 && userId) {
+      memberIds.push(userId);
     }
 
     const project = await Project.create({
@@ -74,8 +77,17 @@ export const createProject = async (req: Request, res: Response, next: NextFunct
       requiredSkills: skills,
       techStack: skills,
       imageUrl: imageUrl || image || "",
+      imagePublicId: req.body.imagePublicId || "",
       featured: isAdmin ? Boolean(featured) : false,
     });
+
+    // Bi-directional synchronization: link project to each member's user profile
+    if (memberIds.length > 0) {
+      await User.updateMany(
+        { _id: { $in: memberIds } },
+        { $addToSet: { projectsContributed: project._id } }
+      ).catch((err) => console.error("Error linking project to users:", err));
+    }
 
     const populated = await Project.findById(project._id)
       .populate("teamMembers", "fullName imageUrl studentId department role email")
@@ -193,13 +205,41 @@ export const updateProject = async (req: Request, res: Response, next: NextFunct
       delete updates.featured;
     }
 
-    if (updates.techStack && !updates.requiredSkills) {
-      updates.requiredSkills = Array.isArray(updates.techStack)
+    if (updates.githubLink === undefined && updates.repoUrl !== undefined) {
+      updates.githubLink = updates.repoUrl;
+    }
+    if (updates.liveDemoLink === undefined && updates.liveUrl !== undefined) {
+      updates.liveDemoLink = updates.liveUrl;
+    }
+    if (updates.imageUrl === undefined && updates.image !== undefined) {
+      updates.imageUrl = updates.image;
+    }
+
+    if (updates.techStack !== undefined || updates.requiredSkills !== undefined) {
+      const skills = Array.isArray(updates.techStack)
         ? updates.techStack
+        : Array.isArray(updates.requiredSkills)
+        ? updates.requiredSkills
         : typeof updates.techStack === "string"
         ? updates.techStack.split(",").map((s: string) => s.trim()).filter(Boolean)
+        : typeof updates.requiredSkills === "string"
+        ? updates.requiredSkills.split(",").map((s: string) => s.trim()).filter(Boolean)
         : [];
+      updates.techStack = skills;
+      updates.requiredSkills = skills;
     }
+
+    let newMemberIds: string[] | undefined;
+    if (updates.teamMembers !== undefined) {
+      newMemberIds = Array.isArray(updates.teamMembers)
+        ? updates.teamMembers.map((m: any) => (typeof m === "object" && m?._id ? String(m._id) : String(m))).filter(Boolean)
+        : typeof updates.teamMembers === "string"
+        ? updates.teamMembers.split(",").map((s: string) => s.trim()).filter(Boolean)
+        : [];
+      updates.teamMembers = newMemberIds;
+    }
+
+    const previousMemberIds = (project.teamMembers || []).map((id) => id.toString());
 
     const updated = await Project.findByIdAndUpdate(req.params.id, updates, {
       new: true,
@@ -207,6 +247,25 @@ export const updateProject = async (req: Request, res: Response, next: NextFunct
     })
       .populate("teamMembers", "fullName imageUrl studentId department role email")
       .populate("createdBy", "fullName imageUrl studentId email");
+
+    // Sync member changes with User model
+    if (newMemberIds !== undefined) {
+      const addedMembers = newMemberIds.filter((id) => !previousMemberIds.includes(id));
+      const removedMembers = previousMemberIds.filter((id) => !newMemberIds!.includes(id));
+
+      if (addedMembers.length > 0) {
+        await User.updateMany(
+          { _id: { $in: addedMembers } },
+          { $addToSet: { projectsContributed: project._id } }
+        ).catch(() => {});
+      }
+      if (removedMembers.length > 0) {
+        await User.updateMany(
+          { _id: { $in: removedMembers } },
+          { $pull: { projectsContributed: project._id } }
+        ).catch(() => {});
+      }
+    }
 
     res.status(200).json({ success: true, data: updated, message: "Project updated successfully" });
   } catch (error) {
@@ -229,6 +288,13 @@ export const deleteProject = async (req: Request, res: Response, next: NextFunct
     }
 
     await Project.findByIdAndDelete(req.params.id);
+
+    // Unlink project from all users' projectsContributed
+    await User.updateMany(
+      { projectsContributed: project._id },
+      { $pull: { projectsContributed: project._id } }
+    ).catch(() => {});
+
     res.status(200).json({ success: true, message: "Project deleted successfully" });
   } catch (error) {
     next(error);

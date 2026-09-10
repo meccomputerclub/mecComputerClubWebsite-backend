@@ -16,6 +16,7 @@ export interface IProject extends Document {
   requiredSkills: string[];
   techStack?: string[];
   imageUrl?: string;
+  imagePublicId?: string;
   featured?: boolean;
 }
 
@@ -83,6 +84,10 @@ const ProjectSchema: Schema = new Schema(
       default: [],
     },
     imageUrl: {
+      type: String,
+      default: "",
+    },
+    imagePublicId: {
       type: String,
       default: "",
     },
