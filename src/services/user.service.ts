@@ -62,6 +62,35 @@ export const createUser = async (payload: Partial<IUser>, validatedInviteDoc?: a
 
   // 3. Create User
   const user = new User(payload);
+
+  // Enforce invitation clearance role onto user document
+  if (inviteDoc?.role) {
+    const invRole = inviteDoc.role.toLowerCase().trim();
+    if (invRole === "admin") {
+      user.role = "admin";
+      user.clubRole = "executive";
+      user.applicationStatus = "approved";
+    } else if (invRole === "moderator") {
+      user.role = "moderator";
+      user.clubRole = "executive";
+      user.applicationStatus = "approved";
+    } else if (invRole === "executive") {
+      user.role = "executive";
+      user.clubRole = "executive";
+      user.applicationStatus = "approved";
+    } else if (invRole === "alumni") {
+      user.role = "alumni";
+      user.clubRole = "alumni";
+      user.isGraduated = true;
+    } else if (invRole === "advisor") {
+      user.role = "member";
+      user.clubRole = "advisor";
+    } else {
+      user.role = user.role && user.role !== "guest" ? user.role : "member";
+      user.clubRole = user.clubRole || "member";
+    }
+  }
+
   const { token, code } = user.generateEmailVerification();
   await user.save();
 
@@ -99,7 +128,9 @@ export const verifyUserByToken = async (email: string, token: string) => {
   if (!user) throw new Error("Invalid or expired token");
 
   user.isVerified = true;
-  user.applicationStatus = "pending";
+  if (user.applicationStatus !== "approved") {
+    user.applicationStatus = "pending";
+  }
   user.emailVerifiedAt = new Date();
   user.verificationCode = undefined;
   user.verificationToken = undefined;
@@ -117,7 +148,9 @@ export const verifyUserByCode = async (email: string, code: string) => {
   if (!user) throw new Error("Invalid code");
   // optional: check expiry if you want code to expire with token
   user.isVerified = true;
-  user.applicationStatus = "pending";
+  if (user.applicationStatus !== "approved") {
+    user.applicationStatus = "pending";
+  }
   user.emailVerifiedAt = new Date();
   user.verificationCode = undefined;
   user.verificationToken = undefined;

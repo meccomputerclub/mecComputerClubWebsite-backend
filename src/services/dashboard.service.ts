@@ -271,10 +271,12 @@ export const approveOrRejectUser = async (
     user.applicationStatus = "approved";
     user.approvedBy = adminId as any;
     user.approvedAt = new Date();
-    user.rejectionReason = undefined;
-    // if approved and graduated, set role=alumni, otherwise member
-    if (user.isGraduated) user.role = "alumni";
-    else if (user.role === "guest") user.role = "member";
+    // if approved and graduated, set role=alumni, otherwise member (preserves admin, moderator, executive)
+    if (user.role === "guest") {
+      user.role = user.isGraduated ? "alumni" : "member";
+    } else if (user.isGraduated && user.role === "member") {
+      user.role = "alumni";
+    }
     await user.save();
 
     // notify user via email

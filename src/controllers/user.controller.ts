@@ -133,6 +133,52 @@ export const register = async (req: Request, res: Response) => {
       }
     }
 
+    // 3b. Strictly Enforce Role and Privileges from Verified Invitation Code
+    const inviteRole = (inviteDoc.role || payload.role || "member").toLowerCase().trim();
+    if (inviteRole === "admin") {
+      payload.role = "admin";
+      payload.clubRole = "executive";
+      payload.applicationStatus = "approved";
+      if (!payload.designation || payload.designation === "General Member") {
+        payload.designation = "Administrator";
+      }
+    } else if (inviteRole === "moderator") {
+      payload.role = "moderator";
+      payload.clubRole = "executive";
+      payload.applicationStatus = "approved";
+      if (!payload.designation || payload.designation === "General Member") {
+        payload.designation = "Club Moderator";
+      }
+    } else if (inviteRole === "executive") {
+      payload.role = "executive";
+      payload.clubRole = "executive";
+      payload.applicationStatus = "approved";
+      if (!payload.designation || payload.designation === "General Member") {
+        payload.designation = "Executive Member";
+      }
+    } else if (inviteRole === "alumni") {
+      payload.role = "alumni";
+      payload.clubRole = "alumni";
+      payload.isGraduated = true;
+      if (!payload.designation || payload.designation === "General Member") {
+        payload.designation = "Alumni";
+      }
+    } else if (inviteRole === "advisor") {
+      payload.role = "member";
+      payload.clubRole = "advisor";
+      if (!payload.designation || payload.designation === "General Member") {
+        payload.designation = "Faculty Advisor";
+      }
+      payload.session = payload.session || "Faculty";
+      payload.batch = payload.batch || "Faculty";
+      if (!payload.studentId || payload.studentId.startsWith("STD-")) {
+        payload.studentId = payload.facultyId || `FAC-${payload.department || "CSE"}-${Date.now().toString().slice(-4)}`;
+      }
+    } else {
+      payload.role = payload.role && payload.role !== "guest" ? payload.role : "member";
+      payload.clubRole = payload.clubRole || "member";
+    }
+
     // 4. Pre-upload Unique Account Check
     const exists = await User.findOne({
       $or: [{ email: payload.email.toLowerCase().trim() }, { studentId: payload.studentId }],
