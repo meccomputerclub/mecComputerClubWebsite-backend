@@ -9,7 +9,10 @@ import { createBroadcastNotification } from "../services/notification.service";
  */
 export const createContactMessage = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { senderName, senderEmail, subject, body } = req.body;
+    const senderName = (req.body.senderName || req.body.name || "").trim();
+    const senderEmail = (req.body.senderEmail || req.body.email || "").trim();
+    const subject = (req.body.subject || "").trim();
+    const body = (req.body.body || req.body.message || "").trim();
 
     if (!senderName || !senderEmail || !subject || !body) {
       return res.status(400).json({ success: false, message: "All fields are required." });
