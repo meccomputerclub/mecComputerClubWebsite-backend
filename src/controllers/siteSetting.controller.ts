@@ -5,16 +5,16 @@ import SiteSetting from "../models/SiteSetting.model";
 const DEFAULT_SETTINGS = [
   { key: "club_name", value: "MEC Computer Club", label: "Club Name", description: "Official name displayed site-wide." },
   { key: "club_tagline", value: "Learn. Build. Share.", label: "Club Tagline", description: "Short tagline shown in the hero section." },
+  { key: "founded_year", value: "2015", label: "Founded Year", description: "Year the club was founded." },
+  { key: "membership_fee", value: "500", label: "Membership Fee (BDT)", description: "Annual membership fee in BDT." },
+  { key: "address", value: "Department of CSE, Mymensingh Engineering College, Khagdahar, Mymensingh-2200", label: "Club Address", description: "Physical address of the club." },
   { key: "contact_email", value: "meccomputerclub@gmail.com", label: "Contact Email", description: "Primary contact email shown on the website." },
   { key: "contact_phone", value: "+8801780667954", label: "Contact Phone", description: "Primary phone number shown on the website." },
   { key: "whatsapp_number", value: "8801780667954", label: "WhatsApp Number", description: "WhatsApp number (digits only, no +)." },
   { key: "facebook_url", value: "https://www.facebook.com/mec.programmingclub", label: "Facebook URL", description: "Club Facebook page URL." },
   { key: "linkedin_url", value: "https://www.linkedin.com/in/mec-computer-club/", label: "LinkedIn URL", description: "Club LinkedIn page URL." },
   { key: "youtube_url", value: "https://www.youtube.com/@MECComputerClub", label: "YouTube URL", description: "Club YouTube channel URL." },
-  { key: "address", value: "Mymensingh Engineering College, Mymensingh, Bangladesh", label: "Address", description: "Physical address of the club." },
-  { key: "office_hours", value: "Sat–Thu: 10:00–18:00", label: "Office Hours", description: "Office hours shown on the contact page." },
-  { key: "membership_fee", value: "500", label: "Membership Fee (BDT)", description: "Annual membership fee in BDT." },
-  { key: "founded_year", value: "2015", label: "Founded Year", description: "Year the club was founded." },
+  { key: "github_url", value: "https://github.com", label: "GitHub URL", description: "Club GitHub organization URL." },
   // Batch settings — current most-junior (smallest) batch number per department.
   // The registration form shows the last 10 batches up to this number.
   { key: "batch_current_CSE", value: "6", label: "CSE — Current Junior Batch No.", description: "The most junior (latest) CSE batch number. Registration form shows the last 10 batches up to this number (e.g., 6 shows 1st–6th Batch)." },
@@ -25,6 +25,9 @@ const DEFAULT_SETTINGS = [
 
 export const getSiteSettings = async (req: Request, res: Response, next: NextFunction) => {
   try {
+    // Delete legacy office_hours if it exists
+    await SiteSetting.deleteMany({ key: "office_hours" });
+
     let settings = await SiteSetting.find().sort({ key: 1 }).lean();
 
     // Ensure all default settings exist
@@ -35,6 +38,9 @@ export const getSiteSettings = async (req: Request, res: Response, next: NextFun
       settings = await SiteSetting.find().sort({ key: 1 }).lean();
     }
 
+    // Filter out office_hours just in case
+    settings = settings.filter((s) => s.key !== "office_hours");
+
     res.status(200).json({ success: true, data: settings });
   } catch (error) {
     next(error);
@@ -42,31 +48,50 @@ export const getSiteSettings = async (req: Request, res: Response, next: NextFun
 };
 
 /**
- * @desc  Public endpoint — returns only batch_current_* settings (no auth required)
+ * @desc  Public endpoint — returns batch settings & public site settings (no auth required)
  * @route GET /api/site-settings/public
  */
 export const getPublicBatchSettings = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    let batchSettings = await SiteSetting.find({ key: /^batch_current_/ }).lean();
+    // Clean up legacy office_hours
+    await SiteSetting.deleteMany({ key: "office_hours" });
 
-    // If any batch defaults are missing, insert them
-    const existingBatchKeys = new Set(batchSettings.map((s) => s.key));
-    const missingBatchDefaults = DEFAULT_SETTINGS.filter(
-      (d) => d.key.startsWith("batch_current_") && !existingBatchKeys.has(d.key)
-    );
-    if (missingBatchDefaults.length > 0) {
-      await SiteSetting.insertMany(missingBatchDefaults);
-      batchSettings = await SiteSetting.find({ key: /^batch_current_/ }).lean();
+    let allSettings = await SiteSetting.find().lean();
+
+    // If any defaults are missing, insert them
+    const existingKeys = new Set(allSettings.map((s) => s.key));
+    const missingDefaults = DEFAULT_SETTINGS.filter((d) => !existingKeys.has(d.key));
+    if (missingDefaults.length > 0) {
+      await SiteSetting.insertMany(missingDefaults);
+      allSettings = await SiteSetting.find().lean();
     }
 
-    // Build a clean map: { CSE: 6, EEE: 14, CE: 8 }
+    // Build batchMap for existing components expecting { CSE: 6, EEE: 14, CE: 8 }
     const batchMap: Record<string, number> = { CSE: 6, EEE: 14, CE: 8 };
-    for (const s of batchSettings) {
-      const dept = s.key.replace("batch_current_", "");
-      batchMap[dept] = parseInt(s.value) || 1;
+    const settingsMap: Record<string, string> = {};
+
+    for (const s of allSettings) {
+      if (s.key === "office_hours") continue;
+      if (s.key.startsWith("batch_current_")) {
+        const dept = s.key.replace("batch_current_", "");
+        batchMap[dept] = parseInt(s.value) || 1;
+      }
+      settingsMap[s.key] = s.value;
     }
 
-    res.status(200).json({ success: true, data: batchMap });
+    // Also ensure DEFAULT_SETTINGS fallback values in settingsMap
+    for (const d of DEFAULT_SETTINGS) {
+      if (!settingsMap[d.key]) {
+        settingsMap[d.key] = d.value;
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      data: batchMap,
+      batches: batchMap,
+      settings: settingsMap,
+    });
   } catch (error) {
     next(error);
   }
@@ -87,18 +112,23 @@ export const updateSiteSettings = async (req: Request, res: Response, next: Next
       return res.status(400).json({ success: false, message: "settings array is required." });
     }
 
-    // Upsert each setting by key
-    const ops = settings.map((s) => ({
-      updateOne: {
-        filter: { key: s.key },
-        update: { $set: { value: s.value, label: s.label, description: s.description } },
-        upsert: true,
-      },
-    }));
+    // Upsert each setting by key (ignoring removed office_hours)
+    const ops = settings
+      .filter((s) => s.key !== "office_hours")
+      .map((s) => ({
+        updateOne: {
+          filter: { key: s.key },
+          update: { $set: { value: s.value, label: s.label, description: s.description } },
+          upsert: true,
+        },
+      }));
 
-    await SiteSetting.bulkWrite(ops);
+    if (ops.length > 0) {
+      await SiteSetting.bulkWrite(ops);
+    }
 
-    const updated = await SiteSetting.find().sort({ key: 1 }).lean();
+    let updated = await SiteSetting.find().sort({ key: 1 }).lean();
+    updated = updated.filter((s) => s.key !== "office_hours");
     res.status(200).json({ success: true, message: "Settings updated successfully.", data: updated });
   } catch (error) {
     next(error);
