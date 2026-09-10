@@ -88,9 +88,35 @@ export interface IUser extends Document {
   projectsContributed?: mongoose.Types.ObjectId[];
   lastLogin?: Date | null;
 
+  // Security & Brute-force protection
+  failedLoginAttempts: number;
+  lockUntil?: Date | null;
+  loginSecurityCode?: string | null;
+  loginSecurityCodeExpiry?: Date | null;
+  securityCodeSentAt?: Date | null;
+
+  activeSession?: {
+    deviceId?: string;
+    deviceSignature?: string;
+    ip?: string;
+    userAgent?: string;
+    lastActiveAt?: Date;
+    isOnline?: boolean;
+  };
+
+  blockedDevices?: Array<{
+    deviceSignature: string;
+    ip?: string;
+    userAgent?: string;
+    failedAttempts: number;
+    blockedAt: Date;
+    isBlocked: boolean;
+  }>;
+
   comparePassword(candidate: string): Promise<boolean>;
   generateEmailVerification(): { token: string; code: string };
   generatePasswordReset(): string;
+  generateLoginSecurityCode(): string;
 }
 
 const userSchema: Schema<IUser> = new Schema(
@@ -202,8 +228,34 @@ const userSchema: Schema<IUser> = new Schema(
 
     eventsAttended: [{ type: Schema.Types.ObjectId, ref: "Event" }],
     certificates: [{ type: Schema.Types.ObjectId, ref: "Certificate" }],
-    projectsContributed: [{ type: Schema.Types.ObjectId, ref: "Project" }],
     lastLogin: Date,
+
+    // Security & Brute-force protection
+    failedLoginAttempts: { type: Number, default: 0 },
+    lockUntil: { type: Date, default: null },
+    loginSecurityCode: { type: String, default: null },
+    loginSecurityCodeExpiry: { type: Date, default: null },
+    securityCodeSentAt: { type: Date, default: null },
+
+    activeSession: {
+      deviceId: { type: String, default: "" },
+      deviceSignature: { type: String, default: "" },
+      ip: { type: String, default: "" },
+      userAgent: { type: String, default: "" },
+      lastActiveAt: { type: Date, default: null },
+      isOnline: { type: Boolean, default: false },
+    },
+
+    blockedDevices: [
+      {
+        deviceSignature: { type: String, required: true },
+        ip: { type: String, default: "" },
+        userAgent: { type: String, default: "" },
+        failedAttempts: { type: Number, default: 0 },
+        blockedAt: { type: Date, default: Date.now },
+        isBlocked: { type: Boolean, default: false },
+      },
+    ],
   },
   { timestamps: true }
 );
@@ -343,6 +395,14 @@ userSchema.methods.generatePasswordReset = function () {
   this.passwordResetToken = crypto.createHash("sha256").update(resetToken).digest("hex");
   this.passwordResetExpiry = new Date(Date.now() + 30 * 60 * 1000);
   return resetToken;
+};
+
+userSchema.methods.generateLoginSecurityCode = function () {
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  this.loginSecurityCode = code;
+  this.loginSecurityCodeExpiry = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+  this.securityCodeSentAt = new Date();
+  return code;
 };
 
 export default mongoose.model<IUser>("User", userSchema);

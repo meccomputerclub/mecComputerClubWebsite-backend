@@ -2,6 +2,7 @@ import { Router } from "express";
 import * as userCtrl from "../controllers/user.controller";
 import { authMiddleware } from "../middlewares/auth.middleware";
 import { fastVerificationLimiter } from "../middlewares/verificationLimiter.middleware";
+import { loginIpRateLimiter } from "../middlewares/loginRateLimiter.middleware";
 import { createUploader } from "../config/multer.config";
 import { checkInviteCodeValidation } from "../middlewares/isolateRegistrationForm";
 
@@ -10,7 +11,7 @@ const router = Router();
 const upload = createUploader("users_pp");
 // public
 router.post("/register", checkInviteCodeValidation(), upload.single("image"), userCtrl.register);
-router.post("/login", userCtrl.login);
+router.post("/login", loginIpRateLimiter, userCtrl.login);
 router.post("/verify/token", userCtrl.verifyEmailToken);
 router.post("/verify/code", userCtrl.verifyEmailCode);
 router.post("/password/request", userCtrl.requestPasswordReset);

@@ -6,7 +6,9 @@ export type EmailType =
   | "passwordReset"
   | "emailVerification"
   | "status"
-  | "adminMailForMemberRegistration";
+  | "adminMailForMemberRegistration"
+  | "loginSecurityCode"
+  | "deviceBlocked";
 
 interface EmailData {
   userName?: string;
@@ -26,6 +28,9 @@ interface EmailData {
   registrationDate?: string;
   userImageUrl?: string;
   email?: string;
+  deviceInfo?: string;
+  ipAddress?: string;
+  remainingAttempts?: number;
 }
 
 function getStyle() {
@@ -941,6 +946,188 @@ export function generateEmail(type: EmailType, data: EmailData) {
                           </td>
                         </tr>
                       </table>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            ${getFooter()}
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+`;
+
+    case "loginSecurityCode":
+      return `
+      <!DOCTYPE html>
+<html
+  lang="en"
+  xmlns:v="urn:schemas-microsoft-com:vml"
+  xmlns:o="urn:schemas-microsoft-com:office:office"
+>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>Login Security Code - ${clubName}</title>
+
+    ${getStyle()}
+  </head>
+
+  <body>
+    <div class="preheader">
+      Your MEC Computer Club security login code is ${data.code}. Valid for 30 minutes.
+    </div>
+
+    <table border="0" cellpadding="0" cellspacing="0" class="main-wrapper">
+      <tr>
+        <td align="center" class="main-cell">
+          <table border="0" cellpadding="0" cellspacing="0" class="card-container">
+            <tr>
+              <td align="center" class="card">
+                ${getHeader()}
+
+                <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                  <tr>
+                    <td class="content-padding">
+                      <h1 class="header-text">Security Code for Login</h1>
+
+                      <p class="body-text">
+                        <strong>Hi ${data.userName || "Member"},</strong> <br>
+                        Multiple unsuccessful login attempts were detected on your <strong>${clubName}</strong> account.
+                        To prevent your account from being locked out, you can enter the one-time security code below alongside your credentials to verify your identity:
+                      </p>
+
+                      <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                        <tr>
+                          <td align="center" style="padding-bottom: 24px">
+                            <div class="otp-container">
+                              <span class="otp-label">One-Time Security Code</span>
+                              <span class="otp-value">${data.code}</span>
+                            </div>
+                          </td>
+                        </tr>
+                      </table>
+
+                      <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                        <tr>
+                          <td align="center">
+                            <p class="warning-box">
+                              ⏰ Valid for <strong>30 minutes</strong>. After 5 failed attempts, the account will be locked for 30 minutes unless unlocked with this code.
+                            </p>
+
+                            <p class="body-text" style="text-align: left; margin-top: 24px">
+                              If you did not initiate these login attempts, someone may be attempting to access your account. We strongly advise resetting your password immediately.
+                            </p>
+                          </td>
+                        </tr>
+                      </table>
+
+                      ${
+                        data.link
+                          ? `
+                      <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                        <tr>
+                          <td align="center" style="padding-bottom: 24px; color: #ffffff">
+                            <a href="${data.link}" target="_blank" class="btn-primary">
+                              Reset Password
+                            </a>
+                          </td>
+                        </tr>
+                      </table>
+                      `
+                          : ""
+                      }
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            ${getFooter()}
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+`;
+
+    case "deviceBlocked":
+      return `
+      <!DOCTYPE html>
+<html
+  lang="en"
+  xmlns:v="urn:schemas-microsoft-com:vml"
+  xmlns:o="urn:schemas-microsoft-com:office:office"
+>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>Security Alert: Device Blocked - ${clubName}</title>
+
+    ${getStyle()}
+  </head>
+
+  <body>
+    <div class="preheader">
+      Security Alert: An unrecognized device was blocked from attempting to log into your MEC Computer Club account.
+    </div>
+
+    <table border="0" cellpadding="0" cellspacing="0" class="main-wrapper">
+      <tr>
+        <td align="center" class="main-cell">
+          <table border="0" cellpadding="0" cellspacing="0" class="card-container">
+            <tr>
+              <td align="center" class="card">
+                ${getHeader()}
+
+                <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                  <tr>
+                    <td class="content-padding">
+                      <h1 class="header-text" style="color: #dc2626;">Security Alert: Device Blocked</h1>
+
+                      <p class="body-text">
+                        <strong>Hi ${data.userName || "Member"},</strong> <br>
+                        While you were logged in and active on your account, another device attempted to log into your <strong>${clubName}</strong> account with 3 incorrect passwords.
+                      </p>
+
+                      <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                        <tr>
+                          <td align="center">
+                            <p class="warning-box" style="border-left-color: #dc2626;">
+                              🛡️ That device has been <strong>blocked</strong> from submitting further login attempts against your account.
+                            </p>
+
+                            <p class="body-text" style="text-align: left; margin-top: 24px">
+                              ${data.deviceInfo ? `<strong>Device:</strong> ${data.deviceInfo}<br>` : ""}
+                              ${data.ipAddress ? `<strong>IP Address:</strong> ${data.ipAddress}<br>` : ""}
+                              If this was not you, we strongly recommend that you update your password immediately to ensure your account remains safe.
+                            </p>
+                          </td>
+                        </tr>
+                      </table>
+
+                      ${
+                        data.link
+                          ? `
+                      <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                        <tr>
+                          <td align="center" style="padding-bottom: 24px; color: #ffffff">
+                            <a href="${data.link}" target="_blank" class="btn-primary">
+                              Secure Account & Reset Password
+                            </a>
+                          </td>
+                        </tr>
+                      </table>
+                      `
+                          : ""
+                      }
                     </td>
                   </tr>
                 </table>

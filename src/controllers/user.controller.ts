@@ -1,4 +1,6 @@
 import { NextFunction, Request, Response } from "express";
+import crypto from "crypto";
+import bcrypt from "bcryptjs";
 import * as userService from "../services/user.service";
 import User, { IUser } from "../models/User.model";
 import InvitationCodeModel from "../models/InvitationCode.model";
@@ -9,6 +11,9 @@ import { Blog } from "../models/Blog.model";
 import { generateJWT } from "../utils/generateTokens";
 import { uploadToCloudinary, deleteFromCloudinary } from "../services/upload.service";
 import { createBroadcastNotification } from "../services/notification.service";
+import { sendEmail } from "../utils/sendEmail";
+import { generateEmail } from "../utils/generateEmailTemplate";
+import { getClientIp } from "../middlewares/loginRateLimiter.middleware";
 import AppError from "../utils/AppError";
 
 export const register = async (req: Request, res: Response) => {
@@ -217,12 +222,18 @@ export const register = async (req: Request, res: Response) => {
 
 export const login = async (req: Request, res: Response) => {
   try {
-    const { email, studentId, identifier, loginId, password } = req.body;
+    const { email, studentId, identifier, loginId, password, securityCode, deviceId } = req.body;
     const searchIdentifier = (identifier || loginId || email || studentId || "").trim();
 
     if (!searchIdentifier || !password) {
       return res.status(400).json({ success: false, message: "Please provide your Student ID or Email, and Password." });
     }
+
+    // Resolve device signature
+    const clientDeviceId = (req.headers["x-device-id"] as string) || (deviceId as string) || "";
+    const clientUserAgent = (req.headers["user-agent"] as string) || "unknown-agent";
+    const clientIp = getClientIp(req);
+    const deviceSignature = crypto.createHash("sha256").update(`${clientDeviceId}|${clientUserAgent}|${clientIp}`).digest("hex");
 
     const user = await User.findOne({
       $or: [
@@ -231,9 +242,167 @@ export const login = async (req: Request, res: Response) => {
       ],
     }).select("+password");
 
-    if (!user) return res.status(401).json({ success: false, message: "No user found" });
+    // Prevent timing side-channel attack and account enumeration
+    if (!user) {
+      await bcrypt.compare(password, "$2a$10$e8ix775Fpzn9gK.5hXp4aO0V4hS3Ytq4YkF96/N6h.bLzFq5tW4eq");
+      return res.status(401).json({ success: false, message: "Invalid student ID/email or password." });
+    }
+
+    // 1. Check if this device is blocked against this specific account
+    const blockedRecord = user.blockedDevices?.find((d) => d.deviceSignature === deviceSignature && d.isBlocked);
+    if (blockedRecord) {
+      return res.status(403).json({
+        success: false,
+        message: "This device has been blocked from attempting to log into this account due to repeated failed attempts while the account was active on another device.",
+        isDeviceBlocked: true,
+      });
+    }
+
+    const now = new Date();
+    const isLocked = Boolean(user.lockUntil && user.lockUntil > now);
+    const remainingLockMinutes = isLocked && user.lockUntil ? Math.max(1, Math.ceil((user.lockUntil.getTime() - now.getTime()) / 60000)) : 0;
+
+    // Check if security code is provided
+    const providedSecurityCode = securityCode ? String(securityCode).trim() : null;
+    const hasValidSecurityCode =
+      Boolean(providedSecurityCode) &&
+      Boolean(user.loginSecurityCode) &&
+      user.loginSecurityCode === providedSecurityCode &&
+      Boolean(user.loginSecurityCodeExpiry && user.loginSecurityCodeExpiry > now);
+
+    // If account is locked and no valid security code provided
+    if (isLocked && !hasValidSecurityCode) {
+      return res.status(423).json({
+        success: false,
+        message: `Account is temporarily locked due to 5 failed attempts. Please try again in ${remainingLockMinutes} minute(s), or enter the 6-digit security code sent to your registered email to unlock immediately.`,
+        isLocked: true,
+        requiresSecurityCode: true,
+        lockRemainingMinutes: remainingLockMinutes,
+      });
+    }
+
     const matched = await user.comparePassword(password);
-    if (!matched) return res.status(401).json({ success: false, message: "Invalid credentials" });
+
+    // Password verification failed
+    if (!matched) {
+      // Check if user is currently logged in and online on another device
+      const isOnlineOnAnotherDevice =
+        Boolean(user.activeSession?.isOnline) &&
+        Boolean(user.activeSession?.deviceSignature) &&
+        user.activeSession?.deviceSignature !== deviceSignature &&
+        Boolean(user.activeSession?.lastActiveAt && (now.getTime() - new Date(user.activeSession.lastActiveAt).getTime() < 12 * 60 * 60 * 1000));
+
+      if (isOnlineOnAnotherDevice) {
+        if (!user.blockedDevices) {
+          user.blockedDevices = [];
+        }
+        let devBlock = user.blockedDevices.find((d) => d.deviceSignature === deviceSignature);
+        if (!devBlock) {
+          devBlock = {
+            deviceSignature,
+            ip: clientIp,
+            userAgent: clientUserAgent.slice(0, 200),
+            failedAttempts: 0,
+            blockedAt: now,
+            isBlocked: false,
+          };
+          user.blockedDevices.push(devBlock as any);
+        }
+        devBlock.failedAttempts += 1;
+        if (devBlock.failedAttempts >= 3) {
+          devBlock.isBlocked = true;
+          devBlock.blockedAt = now;
+          await user.save();
+
+          // Dispatch security alert email to user
+          const frontendUrl = process.env.FRONTEND_URL || "https://mec-cc.vercel.app";
+          const emailHtml = generateEmail("deviceBlocked", {
+            userName: user.fullName,
+            clubName: "MEC Computer Club",
+            deviceInfo: clientUserAgent.slice(0, 100),
+            ipAddress: clientIp,
+            link: `${frontendUrl}/forgot-password`,
+          });
+          sendEmail(user.email, "Security Alert: Unauthorized Device Blocked - MEC CC", emailHtml).catch((err) =>
+            console.error("Device blocked email error:", err)
+          );
+
+          return res.status(403).json({
+            success: false,
+            message: "This device has been blocked from attempting to log into this account after 3 failed attempts while the account is active on another device.",
+            isDeviceBlocked: true,
+          });
+        }
+      }
+
+      // Increment account failed attempts
+      user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+
+      // When reaching 3 attempts or more, generate/dispatch a 6-digit security code
+      if (user.failedLoginAttempts >= 3) {
+        const canSendCode =
+          !user.securityCodeSentAt ||
+          now.getTime() - new Date(user.securityCodeSentAt).getTime() > 2 * 60 * 1000 ||
+          !user.loginSecurityCodeExpiry ||
+          user.loginSecurityCodeExpiry < now;
+
+        if (canSendCode) {
+          const secCode = user.generateLoginSecurityCode();
+          const frontendUrl = process.env.FRONTEND_URL || "https://mec-cc.vercel.app";
+          const emailHtml = generateEmail("loginSecurityCode", {
+            userName: user.fullName,
+            code: secCode,
+            clubName: "MEC Computer Club",
+            link: `${frontendUrl}/forgot-password`,
+          });
+          sendEmail(user.email, "Security Alert: Login Security Code - MEC CC", emailHtml).catch((err) =>
+            console.error("Failed to send login security code email:", err)
+          );
+        }
+      }
+
+      // If failed attempts reached 5: Lock account for 30 minutes
+      if (user.failedLoginAttempts >= 5) {
+        user.lockUntil = new Date(now.getTime() + 30 * 60 * 1000);
+        await user.save();
+        return res.status(423).json({
+          success: false,
+          message: "Account has been temporarily locked for 30 minutes due to 5 failed attempts. Please enter the 6-digit security code sent to your registered email to unlock immediately, or wait 30 minutes.",
+          isLocked: true,
+          requiresSecurityCode: true,
+          lockRemainingMinutes: 30,
+        });
+      }
+
+      await user.save();
+
+      const remainingAttempts = Math.max(0, 5 - user.failedLoginAttempts);
+      return res.status(401).json({
+        success: false,
+        message: user.failedLoginAttempts >= 3
+          ? `Invalid credentials. Attempt ${user.failedLoginAttempts} of 5. A one-time security code has been sent to your registered email to bypass or prevent lockout.`
+          : `Invalid student ID/email or password. ${remainingAttempts} attempt(s) remaining before temporary lockout.`,
+        attemptsRemaining: remainingAttempts,
+        requiresSecurityCode: user.failedLoginAttempts >= 3,
+      });
+    }
+
+    // Credentials matched! Reset failed attempts and lockout state
+    user.failedLoginAttempts = 0;
+    user.lockUntil = null;
+    user.loginSecurityCode = null;
+    user.loginSecurityCodeExpiry = null;
+    user.securityCodeSentAt = null;
+
+    // Set active session for device collision defense
+    user.activeSession = {
+      deviceId: clientDeviceId,
+      deviceSignature,
+      ip: clientIp,
+      userAgent: clientUserAgent.slice(0, 200),
+      lastActiveAt: now,
+      isOnline: true,
+    };
 
     if (!user.isVerified)
       return res.status(401).json({
@@ -413,6 +582,11 @@ export const getMyProfile = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user.id;
     const user = await userService.getUserProfile(userId);
+    if (userId) {
+      User.findByIdAndUpdate(userId, {
+        $set: { "activeSession.lastActiveAt": new Date(), "activeSession.isOnline": true },
+      }).catch(() => {});
+    }
     res.status(200).json({ success: true, message: "User found", user });
   } catch (err: any) {
     res.clearCookie("auth_token");
@@ -423,6 +597,12 @@ export const getMyProfile = async (req: Request, res: Response) => {
 
 export const logout = async (req: Request, res: Response) => {
   try {
+    const userId = (req as any).user?.id;
+    if (userId) {
+      await User.findByIdAndUpdate(userId, {
+        $set: { "activeSession.isOnline": false, "activeSession.lastActiveAt": new Date() },
+      }).catch(() => {});
+    }
     res.clearCookie("auth_token", { httpOnly: true, secure: true, sameSite: "lax" });
     res.clearCookie("role", { httpOnly: true, secure: true, sameSite: "lax" });
     res.status(200).json({ success: true, message: "Logged out" });
