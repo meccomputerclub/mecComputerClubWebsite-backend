@@ -174,7 +174,7 @@ export const register = async (req: Request, res: Response) => {
       type: "approval",
       title: "New Member Application",
       message: `${user.fullName || "A new student"} submitted an application for club membership.`,
-      link: "/dashboard?tab=members-management",
+      link: "/dashboard/members",
       actionLabel: "Review Application",
       priority: "high",
       metadata: { applicantId: user._id },

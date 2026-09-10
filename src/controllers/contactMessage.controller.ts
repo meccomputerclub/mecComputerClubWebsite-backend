@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import ContactMessage from "../models/ContactMessage.model";
 import User from "../models/User.model";
 import { sendEmail } from "../utils/sendEmail";
-import { createNotification, createBroadcastNotification } from "../services/notification.service";
+import { createNotification } from "../services/notification.service";
 
 /**
  * @desc  Submit a contact message (public)
@@ -21,13 +21,13 @@ export const createContactMessage = async (req: Request, res: Response, next: Ne
 
     const message = await ContactMessage.create({ senderName, senderEmail, subject, body });
 
-    // Direct notifications to all admins and moderators to acknowledge and reply
+    // Direct notifications to all admins, moderators, and executives to acknowledge and reply
     try {
-      const adminAndMods = await User.find({
-        role: { $in: ["admin", "moderator"] },
+      const staffUsers = await User.find({
+        role: { $in: ["admin", "moderator", "executive"] },
       }).select("_id").lean();
 
-      for (const recipientUser of adminAndMods) {
+      for (const recipientUser of staffUsers) {
         createNotification({
           recipient: recipientUser._id,
           type: "message",
@@ -37,20 +37,8 @@ export const createContactMessage = async (req: Request, res: Response, next: Ne
           actionLabel: "Acknowledge & Reply",
           priority: "high",
           metadata: { messageId: message._id, senderName, senderEmail },
-        }).catch((err) => console.error("Admin/mod notification error:", err));
+        }).catch((err) => console.error("Staff notification error:", err));
       }
-
-      // Also broadcast to executive role as backup
-      createBroadcastNotification({
-        recipientRole: "executive",
-        type: "message",
-        title: `New Message: ${subject}`,
-        message: `${senderName} (${senderEmail}): "${body.length > 90 ? body.slice(0, 90) + '...' : body}"`,
-        link: `/dashboard/messages?id=${message._id}`,
-        actionLabel: "Acknowledge & Reply",
-        priority: "high",
-        metadata: { messageId: message._id, senderName, senderEmail },
-      }).catch((err) => console.error("Contact message broadcast notification error:", err));
     } catch (notifErr) {
       console.error("Failed to dispatch contact message notifications:", notifErr);
     }
