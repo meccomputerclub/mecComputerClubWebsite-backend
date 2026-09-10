@@ -325,6 +325,15 @@ export const bulkIssueCertificates = async (req: Request, res: Response, next: N
 
     const userIds = normalizedRecipients.map((r) => r.userId).filter(Boolean);
 
+    // Preload user profiles so recipient details are permanently and immutably snapshotted
+    const userMap = new Map<string, any>();
+    if (userIds.length > 0) {
+      const users = await User.find({ _id: { $in: userIds } })
+        .select("fullName email studentId department")
+        .lean();
+      users.forEach((u: any) => userMap.set(u._id.toString(), u));
+    }
+
     // Filter out users who already have a certificate for this exact event to prevent duplicate issuance
     let existingRecipientIds = new Set<string>();
     if (associatedEventId && userIds.length > 0) {
@@ -345,15 +354,21 @@ export const bulkIssueCertificates = async (req: Request, res: Response, next: N
         continue;
       }
 
+      const uProfile = item.userId ? userMap.get(item.userId.toString()) : null;
+      const snapName = (item.fullName || uProfile?.fullName || "Participant").trim();
+      const snapEmail = (item.email || uProfile?.email || "").trim();
+      const snapStudentId = (item.studentId || uProfile?.studentId || "").trim();
+      const snapDept = (item.department || uProfile?.department || "").trim();
+
       const certId = `MCC-${year}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
       toCreate.push({
         name,
         description: description || (eventDoc ? `Awarded for participation in ${eventDoc.title}` : undefined),
         recipient: item.userId || undefined,
-        recipientName: item.fullName,
-        recipientEmail: item.email,
-        recipientStudentId: item.studentId,
-        recipientDepartment: item.department,
+        recipientName: snapName,
+        recipientEmail: snapEmail,
+        recipientStudentId: snapStudentId,
+        recipientDepartment: snapDept,
         associatedEvent: associatedEventId || undefined,
         template: finalTemplateId || undefined,
         issueDate: dateObj,
@@ -438,6 +453,65 @@ export const revokeCertificate = async (req: Request, res: Response, next: NextF
 };
 
 /**
+ * @desc  Update certificate details or recipient snapshot (admin/executive)
+ * @route PATCH /api/certificates/:id
+ * @access Admin/Executive
+ */
+export const updateCertificate = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id } = req.params;
+    const cert = await Certificate.findById(id);
+    if (!cert) {
+      return res.status(404).json({ success: false, message: "Certificate not found." });
+    }
+
+    const {
+      recipientName,
+      recipientStudentId,
+      recipientEmail,
+      recipientDepartment,
+      name,
+      description,
+      type,
+      position,
+      issueDate,
+      templateId,
+      template,
+      status,
+    } = req.body;
+
+    if (recipientName !== undefined) cert.recipientName = recipientName.trim();
+    if (recipientStudentId !== undefined) cert.recipientStudentId = recipientStudentId.trim();
+    if (recipientEmail !== undefined) cert.recipientEmail = recipientEmail.trim();
+    if (recipientDepartment !== undefined) cert.recipientDepartment = recipientDepartment.trim();
+    if (name !== undefined) cert.name = name.trim();
+    if (description !== undefined) cert.description = description.trim();
+    if (type !== undefined) cert.type = type;
+    if (position !== undefined) cert.position = position?.trim() || undefined;
+    if (issueDate !== undefined) cert.issueDate = new Date(issueDate);
+    if (templateId !== undefined || template !== undefined) cert.template = templateId || template;
+    if (status !== undefined) cert.status = status;
+
+    await cert.save();
+
+    const populated = await Certificate.findById(cert._id)
+      .populate("recipient", "fullName email studentId department batch session imageUrl")
+      .populate("associatedEvent", "title slug date location category")
+      .populate("issuedBy", "fullName role")
+      .populate("template", "name type theme primaryColor borderStyle isDefault")
+      .lean();
+
+    res.status(200).json({
+      success: true,
+      message: "Certificate updated successfully.",
+      data: populated || cert,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * @desc  Delete a certificate permanently (admin)
  * @route DELETE /api/certificates/:id
  * @access Admin
@@ -511,6 +585,9 @@ export const listCertificates = async (req: Request, res: Response, next: NextFu
         { certificateId: { $regex: s, $options: "i" } },
         { name: { $regex: s, $options: "i" } },
         { recipient: { $in: matchedUserIds } },
+        { recipientName: { $regex: s, $options: "i" } },
+        { recipientStudentId: { $regex: s, $options: "i" } },
+        { recipientEmail: { $regex: s, $options: "i" } },
       ];
     }
 
@@ -527,6 +604,24 @@ export const listCertificates = async (req: Request, res: Response, next: NextFu
       Certificate.countDocuments(query),
     ]);
 
+    // Reconstruct recipient snapshot if recipient user document is null (e.g. deleted account) or non-member
+    const formattedCerts = certs.map((c: any) => {
+      const recipientObj = c.recipient || {
+        fullName: c.recipientName || "Participant",
+        studentId: c.recipientStudentId || "",
+        email: c.recipientEmail || "",
+        department: c.recipientDepartment || "",
+      };
+      return {
+        ...c,
+        recipient: recipientObj,
+        recipientName: c.recipientName || recipientObj.fullName,
+        recipientStudentId: c.recipientStudentId || recipientObj.studentId,
+        recipientEmail: c.recipientEmail || recipientObj.email,
+        recipientDepartment: c.recipientDepartment || recipientObj.department,
+      };
+    });
+
     // Quick aggregation counts for admin dashboard
     const [totalCount, validCount, revokedCount] = await Promise.all([
       Certificate.countDocuments(),
@@ -536,7 +631,7 @@ export const listCertificates = async (req: Request, res: Response, next: NextFu
 
     res.status(200).json({
       success: true,
-      data: certs,
+      data: formattedCerts,
       total,
       page,
       limit,

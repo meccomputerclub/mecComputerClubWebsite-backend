@@ -10,6 +10,7 @@ import {
   revokeCertificate,
   deleteCertificate,
   listCertificates,
+  updateCertificate,
 } from "../controllers/certificate.controller";
 
 const router = Router();
@@ -34,6 +35,9 @@ router.post("/", authMiddleware(["admin", "moderator", "executive"]), createCert
 
 // Admin/Executive: bulk issue certificates (for 100+ event attendees or list of student IDs)
 router.post("/bulk", authMiddleware(["admin", "moderator", "executive"]), bulkIssueCertificates);
+
+// Admin/Executive: update a certificate details / recipient metadata
+router.patch("/:id", authMiddleware(["admin", "moderator", "executive"]), updateCertificate);
 
 // Admin/Executive: revoke a certificate
 router.patch("/:id/revoke", authMiddleware(["admin", "moderator", "executive"]), revokeCertificate);
