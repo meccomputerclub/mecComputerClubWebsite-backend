@@ -88,30 +88,30 @@ export interface IUser extends Document {
   projectsContributed?: mongoose.Types.ObjectId[];
   lastLogin?: Date | null;
 
-  // Security & Brute-force protection
-  failedLoginAttempts: number;
-  lockUntil?: Date | null;
-  loginSecurityCode?: string | null;
-  loginSecurityCodeExpiry?: Date | null;
-  securityCodeSentAt?: Date | null;
-
-  activeSession?: {
-    deviceId?: string;
-    deviceSignature?: string;
-    ip?: string;
-    userAgent?: string;
-    lastActiveAt?: Date;
-    isOnline?: boolean;
-  };
-
-  blockedDevices?: Array<{
-    deviceSignature: string;
-    ip?: string;
-    userAgent?: string;
+  // Grouped security & session protection
+  security: {
     failedAttempts: number;
-    blockedAt: Date;
-    isBlocked: boolean;
-  }>;
+    lockUntil?: Date | null;
+    loginCode?: string | null;
+    loginCodeExpiry?: Date | null;
+    codeSentAt?: Date | null;
+    activeSession?: {
+      deviceId?: string;
+      deviceSignature?: string;
+      ip?: string;
+      userAgent?: string;
+      lastActiveAt?: Date;
+      isOnline?: boolean;
+    };
+    blockedDevices?: Array<{
+      deviceSignature: string;
+      ip?: string;
+      userAgent?: string;
+      failedAttempts: number;
+      blockedAt: Date;
+      isBlocked: boolean;
+    }>;
+  };
 
   comparePassword(candidate: string): Promise<boolean>;
   generateEmailVerification(): { token: string; code: string };
@@ -230,32 +230,34 @@ const userSchema: Schema<IUser> = new Schema(
     certificates: [{ type: Schema.Types.ObjectId, ref: "Certificate" }],
     lastLogin: Date,
 
-    // Security & Brute-force protection
-    failedLoginAttempts: { type: Number, default: 0 },
-    lockUntil: { type: Date, default: null },
-    loginSecurityCode: { type: String, default: null },
-    loginSecurityCodeExpiry: { type: Date, default: null },
-    securityCodeSentAt: { type: Date, default: null },
+    // Grouped security & session protection
+    security: {
+      failedAttempts: { type: Number, default: 0 },
+      lockUntil: { type: Date, default: null },
+      loginCode: { type: String, default: null },
+      loginCodeExpiry: { type: Date, default: null },
+      codeSentAt: { type: Date, default: null },
 
-    activeSession: {
-      deviceId: { type: String, default: "" },
-      deviceSignature: { type: String, default: "" },
-      ip: { type: String, default: "" },
-      userAgent: { type: String, default: "" },
-      lastActiveAt: { type: Date, default: null },
-      isOnline: { type: Boolean, default: false },
-    },
-
-    blockedDevices: [
-      {
-        deviceSignature: { type: String, required: true },
+      activeSession: {
+        deviceId: { type: String, default: "" },
+        deviceSignature: { type: String, default: "" },
         ip: { type: String, default: "" },
         userAgent: { type: String, default: "" },
-        failedAttempts: { type: Number, default: 0 },
-        blockedAt: { type: Date, default: Date.now },
-        isBlocked: { type: Boolean, default: false },
+        lastActiveAt: { type: Date, default: null },
+        isOnline: { type: Boolean, default: false },
       },
-    ],
+
+      blockedDevices: [
+        {
+          deviceSignature: { type: String, required: true },
+          ip: { type: String, default: "" },
+          userAgent: { type: String, default: "" },
+          failedAttempts: { type: Number, default: 0 },
+          blockedAt: { type: Date, default: Date.now },
+          isBlocked: { type: Boolean, default: false },
+        },
+      ],
+    },
   },
   { timestamps: true }
 );
@@ -399,10 +401,32 @@ userSchema.methods.generatePasswordReset = function () {
 
 userSchema.methods.generateLoginSecurityCode = function () {
   const code = Math.floor(100000 + Math.random() * 900000).toString();
-  this.loginSecurityCode = code;
-  this.loginSecurityCodeExpiry = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
-  this.securityCodeSentAt = new Date();
+  if (!this.security) {
+    this.security = {
+      failedAttempts: 0,
+      activeSession: { isOnline: false },
+      blockedDevices: [],
+    };
+  }
+  this.security.loginCode = code;
+  this.security.loginCodeExpiry = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+  this.security.codeSentAt = new Date();
   return code;
 };
+
+// Safe fallback for documents with legacy flat fields before migration runs
+userSchema.post("init", function (doc: any) {
+  if (!doc.security) {
+    doc.security = {
+      failedAttempts: doc.failedLoginAttempts || 0,
+      lockUntil: doc.lockUntil || null,
+      loginCode: doc.loginSecurityCode || null,
+      loginCodeExpiry: doc.loginSecurityCodeExpiry || null,
+      codeSentAt: doc.securityCodeSentAt || null,
+      activeSession: doc.activeSession || { isOnline: false },
+      blockedDevices: doc.blockedDevices || [],
+    };
+  }
+});
 
 export default mongoose.model<IUser>("User", userSchema);

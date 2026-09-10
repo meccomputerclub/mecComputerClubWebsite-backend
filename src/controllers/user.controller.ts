@@ -248,8 +248,17 @@ export const login = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Invalid student ID/email or password." });
     }
 
+    // Ensure security subdocument is initialized
+    if (!user.security) {
+      user.security = {
+        failedAttempts: 0,
+        activeSession: { isOnline: false },
+        blockedDevices: [],
+      };
+    }
+
     // 1. Check if this device is blocked against this specific account
-    const blockedRecord = user.blockedDevices?.find((d) => d.deviceSignature === deviceSignature && d.isBlocked);
+    const blockedRecord = user.security.blockedDevices?.find((d) => d.deviceSignature === deviceSignature && d.isBlocked);
     if (blockedRecord) {
       return res.status(403).json({
         success: false,
@@ -259,16 +268,16 @@ export const login = async (req: Request, res: Response) => {
     }
 
     const now = new Date();
-    const isLocked = Boolean(user.lockUntil && user.lockUntil > now);
-    const remainingLockMinutes = isLocked && user.lockUntil ? Math.max(1, Math.ceil((user.lockUntil.getTime() - now.getTime()) / 60000)) : 0;
+    const isLocked = Boolean(user.security.lockUntil && user.security.lockUntil > now);
+    const remainingLockMinutes = isLocked && user.security.lockUntil ? Math.max(1, Math.ceil((user.security.lockUntil.getTime() - now.getTime()) / 60000)) : 0;
 
     // Check if security code is provided
     const providedSecurityCode = securityCode ? String(securityCode).trim() : null;
     const hasValidSecurityCode =
       Boolean(providedSecurityCode) &&
-      Boolean(user.loginSecurityCode) &&
-      user.loginSecurityCode === providedSecurityCode &&
-      Boolean(user.loginSecurityCodeExpiry && user.loginSecurityCodeExpiry > now);
+      Boolean(user.security.loginCode) &&
+      user.security.loginCode === providedSecurityCode &&
+      Boolean(user.security.loginCodeExpiry && user.security.loginCodeExpiry > now);
 
     // If account is locked
     if (isLocked) {
@@ -307,16 +316,16 @@ export const login = async (req: Request, res: Response) => {
       }
       // Check if user is currently logged in and online on another device
       const isOnlineOnAnotherDevice =
-        Boolean(user.activeSession?.isOnline) &&
-        Boolean(user.activeSession?.deviceSignature) &&
-        user.activeSession?.deviceSignature !== deviceSignature &&
-        Boolean(user.activeSession?.lastActiveAt && (now.getTime() - new Date(user.activeSession.lastActiveAt).getTime() < 12 * 60 * 60 * 1000));
+        Boolean(user.security.activeSession?.isOnline) &&
+        Boolean(user.security.activeSession?.deviceSignature) &&
+        user.security.activeSession?.deviceSignature !== deviceSignature &&
+        Boolean(user.security.activeSession?.lastActiveAt && (now.getTime() - new Date(user.security.activeSession.lastActiveAt).getTime() < 12 * 60 * 60 * 1000));
 
       if (isOnlineOnAnotherDevice) {
-        if (!user.blockedDevices) {
-          user.blockedDevices = [];
+        if (!user.security.blockedDevices) {
+          user.security.blockedDevices = [];
         }
-        let devBlock = user.blockedDevices.find((d) => d.deviceSignature === deviceSignature);
+        let devBlock = user.security.blockedDevices.find((d) => d.deviceSignature === deviceSignature);
         if (!devBlock) {
           devBlock = {
             deviceSignature,
@@ -326,7 +335,7 @@ export const login = async (req: Request, res: Response) => {
             blockedAt: now,
             isBlocked: false,
           };
-          user.blockedDevices.push(devBlock as any);
+          user.security.blockedDevices.push(devBlock as any);
         }
         devBlock.failedAttempts += 1;
         if (devBlock.failedAttempts >= 3) {
@@ -356,15 +365,15 @@ export const login = async (req: Request, res: Response) => {
       }
 
       // Increment account failed attempts
-      user.failedLoginAttempts = (user.failedLoginAttempts || 0) + 1;
+      user.security.failedAttempts = (user.security.failedAttempts || 0) + 1;
 
       // When reaching 3 attempts or more, generate/dispatch a 6-digit security code
-      if (user.failedLoginAttempts >= 3) {
+      if (user.security.failedAttempts >= 3) {
         const canSendCode =
-          !user.securityCodeSentAt ||
-          now.getTime() - new Date(user.securityCodeSentAt).getTime() > 2 * 60 * 1000 ||
-          !user.loginSecurityCodeExpiry ||
-          user.loginSecurityCodeExpiry < now;
+          !user.security.codeSentAt ||
+          now.getTime() - new Date(user.security.codeSentAt).getTime() > 2 * 60 * 1000 ||
+          !user.security.loginCodeExpiry ||
+          user.security.loginCodeExpiry < now;
 
         if (canSendCode) {
           const secCode = user.generateLoginSecurityCode();
@@ -382,8 +391,8 @@ export const login = async (req: Request, res: Response) => {
       }
 
       // If failed attempts reached 5: Lock account for 30 minutes
-      if (user.failedLoginAttempts >= 5) {
-        user.lockUntil = new Date(now.getTime() + 30 * 60 * 1000);
+      if (user.security.failedAttempts >= 5) {
+        user.security.lockUntil = new Date(now.getTime() + 30 * 60 * 1000);
         await user.save();
         return res.status(423).json({
           success: false,
@@ -396,26 +405,26 @@ export const login = async (req: Request, res: Response) => {
 
       await user.save();
 
-      const remainingAttempts = Math.max(0, 5 - user.failedLoginAttempts);
+      const remainingAttempts = Math.max(0, 5 - user.security.failedAttempts);
       return res.status(401).json({
         success: false,
-        message: user.failedLoginAttempts >= 3
-          ? `Invalid credentials. Attempt ${user.failedLoginAttempts} of 5. A one-time security code has been sent to your registered email to bypass or prevent lockout.`
+        message: user.security.failedAttempts >= 3
+          ? `Invalid credentials. Attempt ${user.security.failedAttempts} of 5. A one-time security code has been sent to your registered email to bypass or prevent lockout.`
           : `Invalid student ID/email or password. ${remainingAttempts} attempt(s) remaining before temporary lockout.`,
         attemptsRemaining: remainingAttempts,
-        requiresSecurityCode: user.failedLoginAttempts >= 3,
+        requiresSecurityCode: user.security.failedAttempts >= 3,
       });
     }
 
     // Credentials matched! Reset failed attempts and lockout state
-    user.failedLoginAttempts = 0;
-    user.lockUntil = null;
-    user.loginSecurityCode = null;
-    user.loginSecurityCodeExpiry = null;
-    user.securityCodeSentAt = null;
+    user.security.failedAttempts = 0;
+    user.security.lockUntil = null;
+    user.security.loginCode = null;
+    user.security.loginCodeExpiry = null;
+    user.security.codeSentAt = null;
 
     // Set active session for device collision defense
-    user.activeSession = {
+    user.security.activeSession = {
       deviceId: clientDeviceId,
       deviceSignature,
       ip: clientIp,
@@ -604,7 +613,7 @@ export const getMyProfile = async (req: Request, res: Response) => {
     const user = await userService.getUserProfile(userId);
     if (userId) {
       User.findByIdAndUpdate(userId, {
-        $set: { "activeSession.lastActiveAt": new Date(), "activeSession.isOnline": true },
+        $set: { "security.activeSession.lastActiveAt": new Date(), "security.activeSession.isOnline": true },
       }).catch(() => {});
     }
     res.status(200).json({ success: true, message: "User found", user });
@@ -620,7 +629,7 @@ export const logout = async (req: Request, res: Response) => {
     const userId = (req as any).user?.id;
     if (userId) {
       await User.findByIdAndUpdate(userId, {
-        $set: { "activeSession.isOnline": false, "activeSession.lastActiveAt": new Date() },
+        $set: { "security.activeSession.isOnline": false, "security.activeSession.lastActiveAt": new Date() },
       }).catch(() => {});
     }
     res.clearCookie("auth_token", { httpOnly: true, secure: true, sameSite: "lax" });
