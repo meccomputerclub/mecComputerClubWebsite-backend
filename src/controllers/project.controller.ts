@@ -11,6 +11,52 @@ function generateSlug(title: string): string {
   return `${base || "project"}-${Date.now().toString(36)}`;
 }
 
+export function parseRepositories(body: any): Array<{ label: string; url: string }> {
+  const { githubRepositories, githubLinks, githubLink, repoUrl } = body;
+  let reposList: Array<{ label: string; url: string }> = [];
+
+  if (Array.isArray(githubRepositories) && githubRepositories.length > 0) {
+    reposList = githubRepositories
+      .filter((r: any) => r && typeof r.url === "string" && r.url.trim().length > 0)
+      .map((r: any) => ({
+        label: (r.label || "Repository").trim(),
+        url: r.url.trim(),
+      }));
+  } else if (Array.isArray(githubLinks) && githubLinks.length > 0) {
+    reposList = githubLinks
+      .filter((u: any) => typeof u === "string" && u.trim().length > 0)
+      .map((u: string, idx: number) => ({
+        label: idx === 0 ? "Frontend / Main" : "Backend / Sub",
+        url: u.trim(),
+      }));
+  } else if (githubLink || repoUrl) {
+    const single = (githubLink || repoUrl).trim();
+    if (single) {
+      reposList = [{ label: "Main Repository", url: single }];
+    }
+  }
+
+  return reposList;
+}
+
+export function resolveCoverImage(imageUrl?: string, liveUrl?: string, githubRepoUrl?: string): string {
+  if (imageUrl && imageUrl.trim() && !imageUrl.includes("default.jpg")) {
+    return imageUrl.trim();
+  }
+  const live = (liveUrl || "").trim();
+  if (live && (live.startsWith("http://") || live.startsWith("https://"))) {
+    return `https://s0.wp.com/mshots/v1/${encodeURIComponent(live)}?w=900`;
+  }
+  const repo = (githubRepoUrl || "").trim();
+  const ghMatch = repo.match(/github\.com\/([^\/]+)\/([^\/\#\?]+)/i);
+  if (ghMatch) {
+    const owner = ghMatch[1];
+    const repoName = ghMatch[2].replace(/\.git$/i, "");
+    return `https://opengraph.githubassets.com/1/${owner}/${repoName}`;
+  }
+  return "";
+}
+
 export const createProject = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const user = (req as any).user;
@@ -39,6 +85,19 @@ export const createProject = async (req: Request, res: Response, next: NextFunct
     if (!title || !description) {
       return res.status(400).json({ success: false, message: "Project title and description are required" });
     }
+
+    // Validate mandatory GitHub repository link
+    const reposList = parseRepositories(req.body);
+    if (reposList.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "At least one GitHub repository link is mandatory.",
+      });
+    }
+
+    const primaryGithubLink = reposList[0].url;
+    const resolvedLive = (liveDemoLink || liveUrl || "").trim();
+    const finalImageUrl = resolveCoverImage(imageUrl || image, resolvedLive, primaryGithubLink);
 
     const skills = Array.isArray(requiredSkills) && requiredSkills.length > 0
       ? requiredSkills
@@ -70,13 +129,15 @@ export const createProject = async (req: Request, res: Response, next: NextFunct
       status: status || "in_progress",
       startDate: startDate ? new Date(startDate) : new Date(),
       endDate: endDate ? new Date(endDate) : undefined,
-      githubLink: githubLink || repoUrl || "",
-      liveDemoLink: liveDemoLink || liveUrl || "",
+      githubLink: primaryGithubLink,
+      githubRepositories: reposList,
+      githubLinks: reposList.map((r) => r.url),
+      liveDemoLink: resolvedLive,
       teamMembers: memberIds,
       createdBy: userId || undefined,
       requiredSkills: skills,
       techStack: skills,
-      imageUrl: imageUrl || image || "",
+      imageUrl: finalImageUrl,
       imagePublicId: req.body.imagePublicId || "",
       featured: isAdmin ? Boolean(featured) : false,
     });
@@ -205,14 +266,34 @@ export const updateProject = async (req: Request, res: Response, next: NextFunct
       delete updates.featured;
     }
 
-    if (updates.githubLink === undefined && updates.repoUrl !== undefined) {
-      updates.githubLink = updates.repoUrl;
+    if (updates.githubRepositories !== undefined || updates.githubLinks !== undefined || updates.githubLink !== undefined || updates.repoUrl !== undefined) {
+      const reposList = parseRepositories(updates);
+      if (reposList.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "At least one GitHub repository link is mandatory.",
+        });
+      }
+      updates.githubRepositories = reposList;
+      updates.githubLinks = reposList.map((r) => r.url);
+      updates.githubLink = reposList[0].url;
     }
+
     if (updates.liveDemoLink === undefined && updates.liveUrl !== undefined) {
       updates.liveDemoLink = updates.liveUrl;
     }
-    if (updates.imageUrl === undefined && updates.image !== undefined) {
-      updates.imageUrl = updates.image;
+
+    const activeLive = (updates.liveDemoLink !== undefined ? updates.liveDemoLink : project.liveDemoLink) || "";
+    const activeRepo = (updates.githubLink !== undefined ? updates.githubLink : project.githubLink) || "";
+
+    if (updates.imageUrl !== undefined || updates.image !== undefined) {
+      const explicitImg = (updates.imageUrl !== undefined ? updates.imageUrl : updates.image) || "";
+      updates.imageUrl = resolveCoverImage(explicitImg, activeLive, activeRepo);
+    } else if (!project.imageUrl) {
+      const autoImg = resolveCoverImage("", activeLive, activeRepo);
+      if (autoImg) {
+        updates.imageUrl = autoImg;
+      }
     }
 
     if (updates.techStack !== undefined || updates.requiredSkills !== undefined) {

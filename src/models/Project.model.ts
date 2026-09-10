@@ -1,5 +1,10 @@
 import mongoose, { Schema, Document } from "mongoose";
 
+export interface IProjectRepository {
+  label?: string;
+  url: string;
+}
+
 // 1. Define the Interface (for TypeScript)
 export interface IProject extends Document {
   title: string;
@@ -9,6 +14,8 @@ export interface IProject extends Document {
   startDate?: Date;
   endDate?: Date;
   githubLink?: string;
+  githubRepositories?: IProjectRepository[];
+  githubLinks?: string[];
   liveDemoLink?: string;
   teamMembers: mongoose.Types.ObjectId[];
   createdBy?: mongoose.Types.ObjectId;
@@ -55,6 +62,16 @@ const ProjectSchema: Schema = new Schema(
       type: String,
       required: false,
       default: "",
+    },
+    githubRepositories: [
+      {
+        label: { type: String, default: "Repository", trim: true },
+        url: { type: String, required: true, trim: true },
+      },
+    ],
+    githubLinks: {
+      type: [String],
+      default: [],
     },
     liveDemoLink: {
       type: String,
