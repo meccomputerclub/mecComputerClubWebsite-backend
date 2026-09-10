@@ -270,21 +270,41 @@ export const login = async (req: Request, res: Response) => {
       user.loginSecurityCode === providedSecurityCode &&
       Boolean(user.loginSecurityCodeExpiry && user.loginSecurityCodeExpiry > now);
 
-    // If account is locked and no valid security code provided
-    if (isLocked && !hasValidSecurityCode) {
-      return res.status(423).json({
-        success: false,
-        message: `Account is temporarily locked due to 5 failed attempts. Please try again in ${remainingLockMinutes} minute(s), or enter the 6-digit security code sent to your registered email to unlock immediately.`,
-        isLocked: true,
-        requiresSecurityCode: true,
-        lockRemainingMinutes: remainingLockMinutes,
-      });
+    // If account is locked
+    if (isLocked) {
+      if (providedSecurityCode && !hasValidSecurityCode) {
+        return res.status(423).json({
+          success: false,
+          message: `The security code provided is invalid or has expired. Please check the 6-digit code in your email or wait ${remainingLockMinutes} minute(s).`,
+          isLocked: true,
+          requiresSecurityCode: true,
+          lockRemainingMinutes: remainingLockMinutes,
+        });
+      }
+      if (!hasValidSecurityCode) {
+        return res.status(423).json({
+          success: false,
+          message: `Account is temporarily locked due to 5 failed attempts. Please try again in ${remainingLockMinutes} minute(s), or enter the 6-digit security code sent to your registered email to unlock immediately.`,
+          isLocked: true,
+          requiresSecurityCode: true,
+          lockRemainingMinutes: remainingLockMinutes,
+        });
+      }
     }
 
     const matched = await user.comparePassword(password);
 
     // Password verification failed
     if (!matched) {
+      if (isLocked && hasValidSecurityCode) {
+        return res.status(401).json({
+          success: false,
+          message: "Security code verified, but the password entered is incorrect. Please check your password.",
+          isLocked: true,
+          requiresSecurityCode: true,
+          lockRemainingMinutes: remainingLockMinutes,
+        });
+      }
       // Check if user is currently logged in and online on another device
       const isOnlineOnAnotherDevice =
         Boolean(user.activeSession?.isOnline) &&
