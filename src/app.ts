@@ -44,6 +44,8 @@ app.use("/public", express.static(path.join(__dirname, "..", "public")));
 const frontendUrl = process.env.FRONTEND_URL;
 
 const allowedOrigins = [
+  "https://mec-cc.vercel.app",
+  "https://mec-cc-frontend.vercel.app",
   "https://meccomputerclub.vercel.app",
   "https://www.meccomputerclub.org",
   "https://meccomputerclub.org",
@@ -52,15 +54,19 @@ const allowedOrigins = [
   "http://127.0.0.1:3000",
   "http://127.0.0.1:3001",
   frontendUrl,
-];
+].filter(Boolean) as string[];
 
 const corsOptions: CorsOptions = {
   origin: (requestOrigin: string | undefined, callback: any) => {
     if (!requestOrigin) return callback(null, true);
+    const originLower = requestOrigin.replace(/\/+$/, "").toLowerCase();
     if (
-      allowedOrigins.indexOf(requestOrigin) !== -1 ||
-      /\.vercel\.app$/.test(requestOrigin) ||
-      /\.meccomputerclub\.org$/.test(requestOrigin)
+      allowedOrigins.some((o) => o.replace(/\/+$/, "").toLowerCase() === originLower) ||
+      originLower.endsWith(".vercel.app") ||
+      originLower.includes("mec-cc") ||
+      originLower.includes("meccomputerclub") ||
+      /\.vercel\.app$/.test(originLower) ||
+      /\.meccomputerclub\.org$/.test(originLower)
     ) {
       callback(null, true);
     } else {
@@ -77,8 +83,16 @@ const corsOptions: CorsOptions = {
     "X-Invitation-Validated",
     "X-Invite-Code",
     "X-Requested-With",
+    "x-device-id",
+    "X-Device-Id",
     "Accept",
     "Origin",
+  ],
+  exposedHeaders: [
+    "Retry-After",
+    "RateLimit-Limit",
+    "RateLimit-Remaining",
+    "RateLimit-Reset",
   ],
 };
 
