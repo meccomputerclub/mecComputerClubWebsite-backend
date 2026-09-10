@@ -25,6 +25,7 @@ export const getNotifications = async (req: Request, res: Response) => {
     return res.status(200).json({
       success: true,
       data: data.items,
+      notifications: data.items,
       unreadCount: data.unreadCount,
       total: data.total,
       page: data.page,
