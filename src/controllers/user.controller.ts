@@ -339,13 +339,11 @@ export const login = async (req: Request, res: Response) => {
         });
       }
       if (!hasValidSecurityCode) {
-        // Send / refresh security code to email if not sent recently (30s cooldown)
+        // Only generate and send email if no code is currently saved in DB or if existing code has expired
         const canSendCode =
-          !user.security.codeSentAt ||
-          now.getTime() - new Date(user.security.codeSentAt).getTime() > 30 * 1000 ||
+          !user.security.loginCode ||
           !user.security.loginCodeExpiry ||
-          user.security.loginCodeExpiry < now ||
-          !user.security.loginCode;
+          user.security.loginCodeExpiry < now;
 
         if (canSendCode) {
           const secCode = user.generateLoginSecurityCode();
