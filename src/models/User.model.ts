@@ -97,21 +97,11 @@ export interface IUser extends Document {
     loginCodeExpiry?: Date | null;
     codeSentAt?: Date | null;
     activeSession?: {
-      deviceId?: string;
-      deviceSignature?: string;
       ip?: string;
       userAgent?: string;
       lastActiveAt?: Date;
       isOnline?: boolean;
     };
-    blockedDevices?: Array<{
-      deviceSignature: string;
-      ip?: string;
-      userAgent?: string;
-      failedAttempts: number;
-      blockedAt: Date;
-      isBlocked: boolean;
-    }>;
   };
 
   comparePassword(candidate: string): Promise<boolean>;
@@ -240,24 +230,11 @@ const userSchema: Schema<IUser> = new Schema(
       codeSentAt: { type: Date, default: null },
 
       activeSession: {
-        deviceId: { type: String, default: "" },
-        deviceSignature: { type: String, default: "" },
         ip: { type: String, default: "" },
         userAgent: { type: String, default: "" },
         lastActiveAt: { type: Date, default: null },
         isOnline: { type: Boolean, default: false },
       },
-
-      blockedDevices: [
-        {
-          deviceSignature: { type: String, required: true },
-          ip: { type: String, default: "" },
-          userAgent: { type: String, default: "" },
-          failedAttempts: { type: Number, default: 0 },
-          blockedAt: { type: Date, default: Date.now },
-          isBlocked: { type: Boolean, default: false },
-        },
-      ],
     },
   },
   { timestamps: true }
@@ -406,7 +383,6 @@ userSchema.methods.generateLoginSecurityCode = function () {
     this.security = {
       failedAttempts: 0,
       activeSession: { isOnline: false },
-      blockedDevices: [],
     };
   }
   this.security.loginCode = code;
@@ -425,7 +401,6 @@ userSchema.post("init", function (doc: any) {
       loginCodeExpiry: doc.loginSecurityCodeExpiry || null,
       codeSentAt: doc.securityCodeSentAt || null,
       activeSession: doc.activeSession || { isOnline: false },
-      blockedDevices: doc.blockedDevices || [],
     };
   }
 });

@@ -284,18 +284,15 @@ export const register = async (req: Request, res: Response) => {
 
 export const login = async (req: Request, res: Response) => {
   try {
-    const { email, studentId, identifier, loginId, password, securityCode, deviceId } = req.body;
+    const { email, studentId, identifier, loginId, password, securityCode } = req.body;
     const searchIdentifier = (identifier || loginId || email || studentId || "").trim();
 
     if (!searchIdentifier || !password) {
       return res.status(400).json({ success: false, message: "Please provide your Student ID or Email, and Password." });
     }
 
-    // Resolve device signature
-    const clientDeviceId = (req.headers["x-device-id"] as string) || (deviceId as string) || "";
     const clientUserAgent = (req.headers["user-agent"] as string) || "unknown-agent";
     const clientIp = getClientIp(req);
-    const deviceSignature = crypto.createHash("sha256").update(`${clientDeviceId}|${clientUserAgent}|${clientIp}`).digest("hex");
 
     const user = await User.findOne({
       $or: [
@@ -315,18 +312,7 @@ export const login = async (req: Request, res: Response) => {
       user.security = {
         failedAttempts: 0,
         activeSession: { isOnline: false },
-        blockedDevices: [],
       };
-    }
-
-    // 1. Check if this device is blocked against this specific account
-    const blockedRecord = user.security.blockedDevices?.find((d) => d.deviceSignature === deviceSignature && d.isBlocked);
-    if (blockedRecord) {
-      return res.status(403).json({
-        success: false,
-        message: "This device has been blocked from attempting to log into this account due to repeated failed attempts while the account was active on another device.",
-        isDeviceBlocked: true,
-      });
     }
 
     const now = new Date();
@@ -346,16 +332,38 @@ export const login = async (req: Request, res: Response) => {
       if (providedSecurityCode && !hasValidSecurityCode) {
         return res.status(423).json({
           success: false,
-          message: `The security code provided is invalid or has expired. Please check the 6-digit code in your email or wait ${remainingLockMinutes} minute(s).`,
+          message: `The security code provided is invalid or has expired. Please check your email or wait ${remainingLockMinutes} minute(s).`,
           isLocked: true,
           requiresSecurityCode: true,
           lockRemainingMinutes: remainingLockMinutes,
         });
       }
       if (!hasValidSecurityCode) {
+        // Send / refresh security code to email if not sent recently
+        const canSendCode =
+          !user.security.codeSentAt ||
+          now.getTime() - new Date(user.security.codeSentAt).getTime() > 2 * 60 * 1000 ||
+          !user.security.loginCodeExpiry ||
+          user.security.loginCodeExpiry < now;
+
+        if (canSendCode) {
+          const secCode = user.generateLoginSecurityCode();
+          await user.save();
+          const frontendUrl = process.env.FRONTEND_URL || "https://mec-cc.vercel.app";
+          const emailHtml = generateEmail("loginSecurityCode", {
+            userName: user.fullName,
+            code: secCode,
+            clubName: "MEC Computer Club",
+            link: `${frontendUrl}/forgot-password`,
+          });
+          sendEmail(user.email, "Security Alert: Login Security Code - MEC CC", emailHtml).catch((err) =>
+            console.error("Failed to send login security code email:", err)
+          );
+        }
+
         return res.status(423).json({
           success: false,
-          message: `Account is temporarily locked due to 5 failed attempts. Please try again in ${remainingLockMinutes} minute(s), or enter the 6-digit security code sent to your registered email to unlock immediately.`,
+          message: `Your account is locked. Please check your email and enter the security code.`,
           isLocked: true,
           requiresSecurityCode: true,
           lockRemainingMinutes: remainingLockMinutes,
@@ -376,89 +384,30 @@ export const login = async (req: Request, res: Response) => {
           lockRemainingMinutes: remainingLockMinutes,
         });
       }
-      // Check if user is currently logged in and online on another device
-      const isOnlineOnAnotherDevice =
-        Boolean(user.security.activeSession?.isOnline) &&
-        Boolean(user.security.activeSession?.deviceSignature) &&
-        user.security.activeSession?.deviceSignature !== deviceSignature &&
-        Boolean(user.security.activeSession?.lastActiveAt && (now.getTime() - new Date(user.security.activeSession.lastActiveAt).getTime() < 12 * 60 * 60 * 1000));
-
-      if (isOnlineOnAnotherDevice) {
-        if (!user.security.blockedDevices) {
-          user.security.blockedDevices = [];
-        }
-        let devBlock = user.security.blockedDevices.find((d) => d.deviceSignature === deviceSignature);
-        if (!devBlock) {
-          devBlock = {
-            deviceSignature,
-            ip: clientIp,
-            userAgent: clientUserAgent.slice(0, 200),
-            failedAttempts: 0,
-            blockedAt: now,
-            isBlocked: false,
-          };
-          user.security.blockedDevices.push(devBlock as any);
-        }
-        devBlock.failedAttempts += 1;
-        if (devBlock.failedAttempts >= 3) {
-          devBlock.isBlocked = true;
-          devBlock.blockedAt = now;
-          await user.save();
-
-          // Dispatch security alert email to user
-          const frontendUrl = process.env.FRONTEND_URL || "https://mec-cc.vercel.app";
-          const emailHtml = generateEmail("deviceBlocked", {
-            userName: user.fullName,
-            clubName: "MEC Computer Club",
-            deviceInfo: clientUserAgent.slice(0, 100),
-            ipAddress: clientIp,
-            link: `${frontendUrl}/forgot-password`,
-          });
-          sendEmail(user.email, "Security Alert: Unauthorized Device Blocked - MEC CC", emailHtml).catch((err) =>
-            console.error("Device blocked email error:", err)
-          );
-
-          return res.status(403).json({
-            success: false,
-            message: "This device has been blocked from attempting to log into this account after 3 failed attempts while the account is active on another device.",
-            isDeviceBlocked: true,
-          });
-        }
-      }
 
       // Increment account failed attempts
       user.security.failedAttempts = (user.security.failedAttempts || 0) + 1;
 
-      // When reaching 3 attempts or more, generate/dispatch a 6-digit security code
-      if (user.security.failedAttempts >= 3) {
-        const canSendCode =
-          !user.security.codeSentAt ||
-          now.getTime() - new Date(user.security.codeSentAt).getTime() > 2 * 60 * 1000 ||
-          !user.security.loginCodeExpiry ||
-          user.security.loginCodeExpiry < now;
-
-        if (canSendCode) {
-          const secCode = user.generateLoginSecurityCode();
-          const frontendUrl = process.env.FRONTEND_URL || "https://mec-cc.vercel.app";
-          const emailHtml = generateEmail("loginSecurityCode", {
-            userName: user.fullName,
-            code: secCode,
-            clubName: "MEC Computer Club",
-            link: `${frontendUrl}/forgot-password`,
-          });
-          sendEmail(user.email, "Security Alert: Login Security Code - MEC CC", emailHtml).catch((err) =>
-            console.error("Failed to send login security code email:", err)
-          );
-        }
-      }
-
-      // If failed attempts reached 5: Lock account for 30 minutes
+      // Lock account ONLY when failed attempts reach 5 or more
       if (user.security.failedAttempts >= 5) {
         user.security.lockUntil = new Date(now.getTime() + 30 * 60 * 1000);
+        const secCode = user.generateLoginSecurityCode();
         await user.save();
+
+        const frontendUrl = process.env.FRONTEND_URL || "https://mec-cc.vercel.app";
+        const emailHtml = generateEmail("loginSecurityCode", {
+          userName: user.fullName,
+          code: secCode,
+          clubName: "MEC Computer Club",
+          link: `${frontendUrl}/forgot-password`,
+        });
+        sendEmail(user.email, "Security Alert: Login Security Code - MEC CC", emailHtml).catch((err) =>
+          console.error("Failed to send login security code email:", err)
+        );
+
         return res.status(423).json({
           success: false,
-          message: "Account has been temporarily locked for 30 minutes due to 5 failed attempts. Please enter the 6-digit security code sent to your registered email to unlock immediately, or wait 30 minutes.",
+          message: "Your account is locked. Please check your email and enter the security code.",
           isLocked: true,
           requiresSecurityCode: true,
           lockRemainingMinutes: 30,
@@ -470,11 +419,10 @@ export const login = async (req: Request, res: Response) => {
       const remainingAttempts = Math.max(0, 5 - user.security.failedAttempts);
       return res.status(401).json({
         success: false,
-        message: user.security.failedAttempts >= 3
-          ? `Invalid credentials. Attempt ${user.security.failedAttempts} of 5. A one-time security code has been sent to your registered email to bypass or prevent lockout.`
-          : `Invalid student ID/email or password. ${remainingAttempts} attempt(s) remaining before temporary lockout.`,
+        message: `Invalid student ID/email or password. ${remainingAttempts} attempt(s) remaining before temporary lockout.`,
         attemptsRemaining: remainingAttempts,
-        requiresSecurityCode: user.security.failedAttempts >= 3,
+        isLocked: false,
+        requiresSecurityCode: false,
       });
     }
 
@@ -485,10 +433,7 @@ export const login = async (req: Request, res: Response) => {
     user.security.loginCodeExpiry = null;
     user.security.codeSentAt = null;
 
-    // Set active session for device collision defense
     user.security.activeSession = {
-      deviceId: clientDeviceId,
-      deviceSignature,
       ip: clientIp,
       userAgent: clientUserAgent.slice(0, 200),
       lastActiveAt: now,
