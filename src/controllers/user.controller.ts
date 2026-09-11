@@ -1212,6 +1212,8 @@ export const getPublicMembers = async (req: Request, res: Response, next: NextFu
 export const searchAssignableMembers = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const rawQuery = (req.query.q || req.query.search || "").toString().trim();
+    const category = (req.query.category || "").toString().trim().toLowerCase();
+
     if (!rawQuery || rawQuery.length < 3) {
       return res.status(200).json({
         success: true,
@@ -1224,7 +1226,7 @@ export const searchAssignableMembers = async (req: Request, res: Response, next:
     const escaped = rawQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const regex = new RegExp(escaped, "i");
 
-    const members = await User.find({
+    const queryFilter: any = {
       applicationStatus: "approved",
       profileStatus: { $ne: "deleted" },
       $or: [
@@ -1234,9 +1236,24 @@ export const searchAssignableMembers = async (req: Request, res: Response, next:
         { department: regex },
         { designation: regex },
       ],
-    })
+    };
+
+    // On advisor panel, strictly restrict results to users who are either advisors or alumni
+    if (category === "advisor") {
+      queryFilter.$and = [
+        {
+          $or: [
+            { clubRole: { $in: ["advisor", "alumni"] } },
+            { role: "alumni" },
+            { isGraduated: true },
+          ],
+        },
+      ];
+    }
+
+    const members = await User.find(queryFilter)
       .select(
-        "_id fullName email studentId department session batch designation customRole clubRole role imageUrl imagePosition"
+        "_id fullName email studentId department session batch designation customRole clubRole role imageUrl imagePosition isGraduated"
       )
       .limit(30)
       .sort({ fullName: 1 })
