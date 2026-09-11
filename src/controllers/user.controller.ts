@@ -339,12 +339,13 @@ export const login = async (req: Request, res: Response) => {
         });
       }
       if (!hasValidSecurityCode) {
-        // Send / refresh security code to email if not sent recently
+        // Send / refresh security code to email if not sent recently (30s cooldown)
         const canSendCode =
           !user.security.codeSentAt ||
-          now.getTime() - new Date(user.security.codeSentAt).getTime() > 2 * 60 * 1000 ||
+          now.getTime() - new Date(user.security.codeSentAt).getTime() > 30 * 1000 ||
           !user.security.loginCodeExpiry ||
-          user.security.loginCodeExpiry < now;
+          user.security.loginCodeExpiry < now ||
+          !user.security.loginCode;
 
         if (canSendCode) {
           const secCode = user.generateLoginSecurityCode();
@@ -356,14 +357,17 @@ export const login = async (req: Request, res: Response) => {
             clubName: "MEC Computer Club",
             link: `${frontendUrl}/forgot-password`,
           });
-          sendEmail(user.email, "Security Alert: Login Security Code - MEC CC", emailHtml).catch((err) =>
-            console.error("Failed to send login security code email:", err)
-          );
+          try {
+            await sendEmail(user.email, "Security Alert: Login Security Code - MEC CC", emailHtml);
+            console.log(`[Auth] Login security code sent to ${user.email}`);
+          } catch (err) {
+            console.error("Failed to send login security code email:", err);
+          }
         }
 
         return res.status(423).json({
           success: false,
-          message: `Your account is locked. Please check your email and enter the security code.`,
+          message: "Your account is locked due to several failed attempts. Please check your email and enter the security code to unlock.",
           isLocked: true,
           requiresSecurityCode: true,
           lockRemainingMinutes: remainingLockMinutes,
@@ -401,13 +405,16 @@ export const login = async (req: Request, res: Response) => {
           clubName: "MEC Computer Club",
           link: `${frontendUrl}/forgot-password`,
         });
-        sendEmail(user.email, "Security Alert: Login Security Code - MEC CC", emailHtml).catch((err) =>
-          console.error("Failed to send login security code email:", err)
-        );
+        try {
+          await sendEmail(user.email, "Security Alert: Login Security Code - MEC CC", emailHtml);
+          console.log(`[Auth] Account locked (5 failed attempts). Login security code sent to ${user.email}`);
+        } catch (err) {
+          console.error("Failed to send login security code email:", err);
+        }
 
         return res.status(423).json({
           success: false,
-          message: "Your account is locked. Please check your email and enter the security code.",
+          message: "Your account is locked due to several failed attempts. Please check your email and enter the security code to unlock.",
           isLocked: true,
           requiresSecurityCode: true,
           lockRemainingMinutes: 30,
