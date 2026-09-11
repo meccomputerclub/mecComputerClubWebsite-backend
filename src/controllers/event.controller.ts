@@ -120,6 +120,16 @@ export const handleGetEventById = async (req: Request, res: Response) => {
       .populate("media")
       .populate("certificates")
       .populate({
+        path: "participationClaims.userId",
+        select: "fullName email imageUrl studentId department batch",
+        options: { strictPopulate: false },
+      })
+      .populate({
+        path: "participationClaims.reviewedBy",
+        select: "fullName email",
+        options: { strictPopulate: false },
+      })
+      .populate({
         path: "eventSponsors.sponsorId",
         select: "name logoUrl website",
         options: { strictPopulate: false },
@@ -130,6 +140,8 @@ export const handleGetEventById = async (req: Request, res: Response) => {
     // Normalise — ensure arrays exist even on old documents
     const data = event.toObject({ virtuals: true });
     data.pendingParticipants = data.pendingParticipants || [];
+    data.participationClaims = data.participationClaims || [];
+    data.contributors = data.contributors || [];
     data.winners = data.winners || [];
     data.eventSponsors = data.eventSponsors || [];
     data.media = data.media || [];
@@ -909,4 +921,249 @@ export const getEventCertificates = async (req: Request, res: Response, next: Ne
 
     res.status(200).json({ success: true, data: mapped });
   } catch (error) { next(error); }
+};
+
+// ── Participation Claims (Archived / Past Events) ───────────────────────────
+
+/**
+ * @desc  Submit participation claim for a past event
+ * @route POST /api/events/:id/claim-participation
+ */
+export const claimParticipation = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id: eventId } = req.params;
+    const userId = (req as any).user?._id;
+    if (!userId) {
+      return res.status(401).json({ success: false, message: "Authentication required to claim participation." });
+    }
+
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ success: false, message: "Event not found." });
+    }
+
+    // Rule 1: Participation claim can be made ONLY on past events from today
+    const today = new Date();
+    const eventDate = new Date(event.endDate || event.date);
+    if (eventDate > today && event.status !== "completed") {
+      return res.status(400).json({
+        success: false,
+        message: "Participation claims can only be submitted for past events that have concluded.",
+      });
+    }
+
+    if (!event.allowParticipationClaims) {
+      return res.status(400).json({
+        success: false,
+        message: "Participation claims are not enabled for this event.",
+      });
+    }
+
+    // Check if user already submitted a claim
+    event.participationClaims = event.participationClaims || [];
+    const existingClaim = event.participationClaims.find(
+      (c: any) => c.userId?.toString() === userId.toString()
+    );
+    if (existingClaim) {
+      return res.status(400).json({
+        success: false,
+        message: `You have already submitted a claim for this event (Status: ${existingClaim.status}).`,
+      });
+    }
+
+    // Check if already registered or an approved attendee
+    const isAlreadyAttendee = (event.attendees || []).some(
+      (a: any) => a.toString() === userId.toString()
+    );
+    if (isAlreadyAttendee) {
+      return res.status(400).json({
+        success: false,
+        message: "You are already recorded as an approved attendee for this event.",
+      });
+    }
+
+    const { fullName, email, studentId, department, phone, role, notes } = req.body;
+
+    event.participationClaims.push({
+      userId,
+      fullName: (fullName || (req as any).user.fullName || "").trim(),
+      email: (email || (req as any).user.email || "").trim(),
+      studentId: (studentId || (req as any).user.studentId || "").trim(),
+      department: (department || (req as any).user.department || "").trim(),
+      phone: (phone || (req as any).user.phone || "").trim(),
+      role: (role || "Participant").trim(),
+      notes: (notes || "").trim(),
+      status: "pending",
+      claimedAt: new Date(),
+    });
+
+    await event.save();
+
+    res.status(201).json({
+      success: true,
+      message: "Your participation claim has been submitted for admin verification!",
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc  Get current logged-in user's claim for an event
+ * @route GET /api/events/:id/my-claim
+ */
+export const getMyParticipationClaim = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id: eventId } = req.params;
+    const userId = (req as any).user?._id;
+    if (!userId) {
+      return res.status(200).json({ success: true, data: null, isAttendee: false });
+    }
+
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ success: false, message: "Event not found." });
+    }
+
+    const claim = (event.participationClaims || []).find(
+      (c: any) => c.userId?.toString() === userId.toString()
+    );
+
+    const isAttendee = (event.attendees || []).some(
+      (a: any) => a.toString() === userId.toString()
+    );
+
+    res.status(200).json({
+      success: true,
+      data: claim || null,
+      isAttendee,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc  Approve a participation claim
+ * @route PATCH /api/events/:id/claims/:claimId/approve
+ */
+export const approveParticipationClaim = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id: eventId, claimId } = req.params;
+    const adminId = (req as any).user?._id;
+
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ success: false, message: "Event not found." });
+    }
+
+    event.participationClaims = event.participationClaims || [];
+    const claim = event.participationClaims.find((c: any) => c._id?.toString() === claimId);
+    if (!claim) {
+      return res.status(404).json({ success: false, message: "Participation claim not found." });
+    }
+
+    claim.status = "approved";
+    claim.reviewedAt = new Date();
+    claim.reviewedBy = adminId;
+
+    // Add to attendees if not already present
+    if (!event.attendees.some((a: any) => a.toString() === claim.userId.toString())) {
+      event.attendees.push(claim.userId);
+    }
+
+    // Add to approvedParticipants if not already present
+    event.approvedParticipants = event.approvedParticipants || [];
+    const alreadyInApproved = event.approvedParticipants.some(
+      (p: any) => p.userId?.toString() === claim.userId.toString()
+    );
+    if (!alreadyInApproved) {
+      event.approvedParticipants.push({
+        userId: claim.userId,
+        fullName: claim.fullName,
+        email: claim.email,
+        studentId: claim.studentId,
+        department: claim.department,
+        phone: claim.phone,
+        isTeamLeader: false,
+        approvedAt: new Date(),
+      });
+    }
+
+    await event.save();
+
+    // Link event to user profile
+    await User.findByIdAndUpdate(claim.userId, {
+      $addToSet: { eventsAttended: event._id },
+    });
+
+    // In-app notification to claimant
+    createNotification({
+      recipient: claim.userId,
+      type: "event",
+      title: "Participation Claim Approved! 🎉",
+      message: `Your participation claim in "${event.title}" has been verified and approved.`,
+      link: `/events/${event.slug || event._id}`,
+      actionLabel: "View Event",
+      priority: "high",
+      metadata: { eventId: event._id },
+    }).catch((err) => console.error("Claim notification error:", err));
+
+    res.status(200).json({
+      success: true,
+      message: "Participation claim approved successfully.",
+      data: claim,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc  Reject a participation claim
+ * @route PATCH /api/events/:id/claims/:claimId/reject
+ */
+export const rejectParticipationClaim = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { id: eventId, claimId } = req.params;
+    const adminId = (req as any).user?._id;
+
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({ success: false, message: "Event not found." });
+    }
+
+    event.participationClaims = event.participationClaims || [];
+    const claim = event.participationClaims.find((c: any) => c._id?.toString() === claimId);
+    if (!claim) {
+      return res.status(404).json({ success: false, message: "Participation claim not found." });
+    }
+
+    claim.status = "rejected";
+    claim.reviewedAt = new Date();
+    claim.reviewedBy = adminId;
+
+    // Remove from attendees and approvedParticipants if previously added
+    event.attendees = (event.attendees || []).filter(
+      (a: any) => a.toString() !== claim.userId.toString()
+    );
+    event.approvedParticipants = (event.approvedParticipants || []).filter(
+      (p: any) => p.userId?.toString() !== claim.userId.toString()
+    );
+
+    await event.save();
+
+    // Pull from user eventsAttended
+    await User.findByIdAndUpdate(claim.userId, {
+      $pull: { eventsAttended: event._id },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Participation claim rejected.",
+      data: claim,
+    });
+  } catch (error) {
+    next(error);
+  }
 };

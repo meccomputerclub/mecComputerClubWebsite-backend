@@ -61,6 +61,31 @@ export interface IEventSponsor {
   tier?: string; // "Gold", "Silver", "Bronze", "Partner"
 }
 
+export interface IParticipationClaim {
+  _id?: string;
+  userId: mongoose.Types.ObjectId;
+  fullName: string;
+  email: string;
+  studentId?: string;
+  department?: string;
+  phone?: string;
+  role: string; // "Participant", "Volunteer", "Speaker", "Organizer", "Contestant", etc.
+  notes?: string;
+  status: "pending" | "approved" | "rejected";
+  claimedAt: Date;
+  reviewedAt?: Date;
+  reviewedBy?: mongoose.Types.ObjectId;
+}
+
+export interface IEventContributor {
+  _id?: string;
+  name: string;
+  role: string; // e.g. "Lead Organizer", "Keynote Speaker", "Event Mentor", "Technical Lead"
+  department?: string;
+  userId?: mongoose.Types.ObjectId;
+  avatarUrl?: string;
+}
+
 export interface IEvent extends Document {
   title: string;
   slug?: string;
@@ -80,6 +105,10 @@ export interface IEvent extends Document {
   registrationDeadline?: Date;
   maxParticipants?: number;
   registrationFee?: number;
+  // Past Event Archiving & Claims
+  allowParticipationClaims?: boolean;
+  participationClaims: IParticipationClaim[];
+  contributors: IEventContributor[];
   // Tournament / Event Highlights
   prizePool?: string;
   rewards: IEventReward[];
@@ -173,6 +202,33 @@ const EventSponsorSchema = new Schema<IEventSponsor>({
   tier: { type: String, trim: true },
 }, { _id: true });
 
+const ParticipationClaimSchema = new Schema<IParticipationClaim>({
+  userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
+  fullName: { type: String, required: true, trim: true },
+  email: { type: String, required: true, trim: true },
+  studentId: { type: String, trim: true },
+  department: { type: String, trim: true },
+  phone: { type: String, trim: true },
+  role: { type: String, default: "Participant", trim: true },
+  notes: { type: String, trim: true },
+  status: {
+    type: String,
+    enum: ["pending", "approved", "rejected"],
+    default: "pending",
+  },
+  claimedAt: { type: Date, default: Date.now },
+  reviewedAt: { type: Date },
+  reviewedBy: { type: Schema.Types.ObjectId, ref: "User" },
+}, { _id: true });
+
+const EventContributorSchema = new Schema<IEventContributor>({
+  name: { type: String, required: true, trim: true },
+  role: { type: String, required: true, trim: true },
+  department: { type: String, trim: true },
+  userId: { type: Schema.Types.ObjectId, ref: "User" },
+  avatarUrl: { type: String },
+}, { _id: true });
+
 const EventSchema: Schema = new Schema(
   {
     title: { type: String, required: [true, "Event title is required"], trim: true },
@@ -208,6 +264,10 @@ const EventSchema: Schema = new Schema(
     registrationDeadline: { type: Date },
     maxParticipants: { type: Number },
     registrationFee: { type: Number, default: 0 },
+    // Past Event Archiving & Participation Claims
+    allowParticipationClaims: { type: Boolean, default: false },
+    participationClaims: { type: [ParticipationClaimSchema], default: [] },
+    contributors: { type: [EventContributorSchema], default: [] },
     // Tournament & Highlights
     prizePool: { type: String, trim: true },
     rewards: { type: [EventRewardSchema], default: [] },
