@@ -343,7 +343,7 @@ export function generateEmail(type: EmailType, data: EmailData) {
 
   <body>
     <div class="preheader">
-      Your MEC Computer Club invitation code is ${data.code}. Valid for 30 minutes.
+      Your MEC Computer Club invitation code is ${data.code}. Valid for 15 days.
     </div>
 
     <table border="0" cellpadding="0" cellspacing="0" class="main-wrapper">
@@ -390,7 +390,7 @@ export function generateEmail(type: EmailType, data: EmailData) {
                         <tr>
                           <td align="center">
                             <p class="warning-box">
-                              ⏰ Valid for <strong>7 Days</strong> only.
+                              ⏰ Valid for <strong>15 Days</strong> only.
                             </p>
 
                             <p class="body-text" style="text-align: left ; margin-top: 24px">We can't wait to see what you'll build with us!</p>

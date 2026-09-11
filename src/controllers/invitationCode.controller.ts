@@ -48,14 +48,16 @@ export const createInvitationCode = async (req: Request, res: Response) => {
       });
     }
 
-    // Determine Expiration
+    // Determine Expiration: Single-use individual codes strictly expire in 15 days
     let expiresAt: Date;
-    if (expiresInDays && parseInt(expiresInDays) > 0) {
-      expiresAt = new Date(Date.now() + parseInt(expiresInDays) * 24 * 60 * 60 * 1000);
-    } else if (isPermanent) {
-      expiresAt = new Date(Date.now() + 100 * 365 * 24 * 60 * 60 * 1000); // 100 years for permanent
+    if (isPermanent) {
+      if (expiresInDays && parseInt(expiresInDays) > 0) {
+        expiresAt = new Date(Date.now() + parseInt(expiresInDays) * 24 * 60 * 60 * 1000);
+      } else {
+        expiresAt = new Date(Date.now() + 100 * 365 * 24 * 60 * 60 * 1000); // 100 years for permanent
+      }
     } else {
-      expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days for single-use
+      expiresAt = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000); // strictly 15 days for individual code
     }
 
     // Permanent Code Logic
@@ -445,7 +447,7 @@ export const resendInvitationCode = async (req: Request, res: Response) => {
 
     // Refresh expiry if expired or cancelled
     if (invite.expiresAt && (invite.expiresAt < new Date() || invite.status === "expired" || invite.status === "cancelled")) {
-      invite.expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      invite.expiresAt = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000);
       invite.status = "consumable";
       await invite.save();
     }
