@@ -11,6 +11,18 @@ const DEFAULT_PAGE_CONTENTS: Record<string, any> = {
       ctaText: "Become a Member",
       ctaLink: "/join",
     },
+    stats: {
+      members: "70+",
+      segments: "5+",
+      events: "12+",
+    },
+    techTreeEvents: {
+      cp: "8+ EVENTS",
+      webdev: "5+ EVENTS",
+      ml: "3+ EVENTS",
+      cybersec: "3+ EVENTS",
+      gaming: "3+ EVENTS",
+    },
     contact: {
       email: "meccomputerclub@gmail.com",
       presidentPhone: "01773-758374",
