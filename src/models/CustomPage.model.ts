@@ -7,6 +7,7 @@ export interface ICustomPage extends Document {
   content: string;
   coverImageUrl?: string;
   isPublished: boolean;
+  showOnlyHtmlContent: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -19,6 +20,7 @@ const CustomPageSchema = new Schema<ICustomPage>(
     content: { type: String, required: true },
     coverImageUrl: { type: String },
     isPublished: { type: Boolean, default: false },
+    showOnlyHtmlContent: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
