@@ -70,6 +70,7 @@ export interface IUser extends Document {
 
   role: "guest" | "member" | "moderator" | "admin" | "alumni" | "executive";
   clubRole?: "member" | "executive" | "alumni" | "advisor";
+  /** @deprecated Use `designation` instead. Retained for backward-compatible reads of legacy records. */
   customRole?: string;
   designation?: string;
   applicationStatus: "pending" | "approved" | "rejected";

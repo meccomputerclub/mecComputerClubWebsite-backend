@@ -1103,10 +1103,22 @@ export const updateUserRole = async (req: Request, res: Response, next: NextFunc
     }
     if (role !== undefined) updateData.role = role;
     if (clubRole !== undefined) updateData.clubRole = clubRole;
-    if (customRole !== undefined) updateData.customRole = customRole;
     if (designation !== undefined) {
-      updateData.designation = designation;
-      if (customRole === undefined) updateData.customRole = designation;
+      updateData.designation = designation.trim();
+      // Auto-sync clubRole if clubRole was not explicitly specified in the update
+      if (clubRole === undefined) {
+        const dLower = designation.toLowerCase().trim();
+        if (dLower.includes("advisor") || dLower.includes("patron")) {
+          updateData.clubRole = "advisor";
+        } else if (dLower === "" || dLower === "general member" || dLower === "member" || dLower === "club member") {
+          updateData.clubRole = (isGraduated !== undefined ? isGraduated : existingUser.isGraduated) ? "alumni" : "member";
+        } else {
+          updateData.clubRole = "executive";
+        }
+      }
+    } else if (customRole !== undefined) {
+      // Backward-compatible fallback if an older payload passes customRole
+      updateData.designation = customRole.trim();
     }
     if (applicationStatus !== undefined) updateData.applicationStatus = applicationStatus;
     if (profileStatus !== undefined) updateData.profileStatus = profileStatus;
@@ -1213,7 +1225,17 @@ export const adminCreateMember = async (req: Request, res: Response) => {
       discord: payload.discord || payload.socialLinks?.discord || "",
     };
 
-    // Defaults based on role
+    // Defaults based on designation and clubRole
+    if (payload.designation && !payload.clubRole) {
+      const dLower = payload.designation.toLowerCase().trim();
+      if (dLower.includes("advisor") || dLower.includes("patron")) {
+        payload.clubRole = "advisor";
+      } else if (dLower === "" || dLower === "general member" || dLower === "member" || dLower === "club member") {
+        payload.clubRole = payload.isGraduated ? "alumni" : "member";
+      } else {
+        payload.clubRole = "executive";
+      }
+    }
     const clubRole = payload.clubRole || "member";
     payload.clubRole = clubRole;
 

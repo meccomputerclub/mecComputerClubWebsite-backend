@@ -151,7 +151,7 @@ export const updateDesignationService = async (
     // Also update any users holding this old title
     await User.updateMany(
       { designation: oldTitle },
-      { $set: { designation: newTitle, customRole: newTitle } }
+      { $set: { designation: newTitle } }
     );
   }
 
@@ -196,7 +196,6 @@ export const deleteDesignationService = async (id: string) => {
     {
       $set: {
         designation: "General Member",
-        customRole: "",
         clubRole: "member",
       },
     }
@@ -228,7 +227,6 @@ export const assignMembersToDesignationService = async (
       {
         $set: {
           designation: "General Member",
-          customRole: "",
           clubRole: "member",
         },
       }
@@ -239,7 +237,6 @@ export const assignMembersToDesignationService = async (
   if (newIds.length > 0) {
     const updatePayload: any = {
       designation: designationTitle,
-      customRole: designationTitle,
       clubRole: category === "advisor" ? "advisor" : "executive",
     };
 
