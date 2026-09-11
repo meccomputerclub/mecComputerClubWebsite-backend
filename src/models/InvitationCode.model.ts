@@ -17,6 +17,8 @@ export interface IInvitationCode extends Document {
   usageCount: number; // Number of registrations made with this code
   maxUses?: number; // 0 or undefined for unlimited
 
+  requireApproval?: boolean; // If true, requires admin approval before login; if false, auto-approved
+
   expiresAt?: Date; // Expiration timestamp (optional / far future for permanent)
 
   createdAt: Date;
@@ -80,6 +82,12 @@ const InvitationCodeSchema = new Schema<IInvitationCode>(
     maxUses: {
       type: Number,
       default: 0,
+    },
+
+    requireApproval: {
+      type: Boolean,
+      default: false,
+      index: true,
     },
 
     expiresAt: {

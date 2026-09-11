@@ -89,6 +89,22 @@ export const createUser = async (payload: Partial<IUser>, validatedInviteDoc?: a
       user.role = user.role && user.role !== "guest" ? user.role : "member";
       user.clubRole = user.clubRole || "member";
     }
+
+    // Determine if candidate requires admin approval:
+    // Single-use individual codes ALWAYS bypass admin approval (auto-approved upon email confirmation).
+    // Permanent universal codes check inviteDoc.requireApproval (defaults to true).
+    const requiresAdminApproval =
+      inviteDoc.codeType === "permanent"
+        ? inviteDoc.requireApproval !== undefined
+          ? Boolean(inviteDoc.requireApproval)
+          : true
+        : false;
+
+    if (!requiresAdminApproval) {
+      user.applicationStatus = "approved";
+      user.approvedAt = new Date();
+      user.profileStatus = "active";
+    }
   }
 
   const { token, code } = user.generateEmailVerification();

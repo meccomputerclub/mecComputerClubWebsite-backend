@@ -15,59 +15,40 @@ export const createInvitationCode = async (req: Request, res: Response) => {
     const {
       formId,
       email,
+      emails,
       role = "member",
       codeType = "single_use",
       customCode,
       label,
       expiresInDays,
       maxUses = 0,
+      requireApproval,
       sendEmailNotification = true,
     } = req.body;
 
     const isPermanent = codeType === "permanent";
-    const cleanEmail = email ? email.toLowerCase().trim() : "";
 
-    // 1. Validation for Single-Use
-    if (!isPermanent && !cleanEmail) {
-      return res.status(400).json({ success: false, message: "Candidate email is required for single-use invitation codes." });
+    // 1. Parse emails (supports comma-separated string, array, or newline-separated)
+    const rawEmailInput = emails || email || "";
+    const emailList: string[] = (
+      Array.isArray(rawEmailInput)
+        ? rawEmailInput
+        : typeof rawEmailInput === "string"
+        ? rawEmailInput.split(/[\n,]+/)
+        : []
+    )
+      .map((e: string) => e.trim().toLowerCase())
+      .filter((e: string) => Boolean(e) && e.includes("@"));
+
+    // Validation for Single-Use
+    if (!isPermanent && emailList.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide at least one recipient email for single-use invitation codes.",
+      });
     }
 
-    if (cleanEmail && !isPermanent) {
-      // Check if active user already exists with this email
-      const existingUser = await UserModel.findOne({ email: cleanEmail });
-      if (existingUser) {
-        if (existingUser.isVerified && existingUser.applicationStatus === "approved") {
-          return res.status(400).json({
-            success: false,
-            message: `An active, verified member account already exists for "${cleanEmail}".`,
-          });
-        }
-        // If account is incomplete/unverified, remove stale stub
-        await UserModel.deleteOne({ _id: existingUser._id });
-      }
-
-      // Delete previous stale single-use codes for this email
-      await InvitationCode.deleteMany({ email: cleanEmail, codeType: "single_use" });
-    }
-
-    // 2. Generate or Validate Unique Code
-    let code: string;
-    if (customCode && typeof customCode === "string" && customCode.trim()) {
-      code = customCode.trim().toUpperCase();
-      const existing = await InvitationCode.findOne({ code });
-      if (existing) {
-        return res.status(400).json({ success: false, message: `The invitation code "${code}" is already in use. Please choose another.` });
-      }
-    } else {
-      code = generateOtpCode();
-      let existing = await InvitationCode.findOne({ code });
-      while (existing) {
-        code = generateOtpCode();
-        existing = await InvitationCode.findOne({ code });
-      }
-    }
-
-    // 3. Set Expiration
+    // Determine Expiration
     let expiresAt: Date;
     if (expiresInDays && parseInt(expiresInDays) > 0) {
       expiresAt = new Date(Date.now() + parseInt(expiresInDays) * 24 * 60 * 60 * 1000);
@@ -77,41 +58,148 @@ export const createInvitationCode = async (req: Request, res: Response) => {
       expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days for single-use
     }
 
-    const invite = await InvitationCode.create({
-      code,
-      codeType: isPermanent ? "permanent" : "single_use",
-      formId,
-      role: role || "member",
-      email: cleanEmail,
-      label: label ? label.trim() : isPermanent ? "Permanent Reusable Code" : "Individual Member Invite",
-      expiresAt,
-      status: "consumable",
-      usageCount: 0,
-      maxUses: parseInt(maxUses) || 0,
-    });
+    // Permanent Code Logic
+    if (isPermanent) {
+      let code: string;
+      if (customCode && typeof customCode === "string" && customCode.trim()) {
+        code = customCode.trim().toUpperCase();
+        const existing = await InvitationCode.findOne({ code });
+        if (existing) {
+          return res.status(400).json({
+            success: false,
+            message: `The invitation code "${code}" is already in use. Please choose another.`,
+          });
+        }
+      } else {
+        code = generateOtpCode();
+        let existing = await InvitationCode.findOne({ code });
+        while (existing) {
+          code = generateOtpCode();
+          existing = await InvitationCode.findOne({ code });
+        }
+      }
 
-    const assignedRole = invite.role || "member";
+      // Universal permanent code: default requireApproval to true unless explicitly disabled
+      const permanentRequireApproval =
+        requireApproval !== undefined ? Boolean(requireApproval) : true;
 
-    // 4. Send Email if email is present and notification requested
-    if (cleanEmail && sendEmailNotification) {
+      const invite = await InvitationCode.create({
+        code,
+        codeType: "permanent",
+        formId,
+        role: role || "member",
+        email: emailList[0] || "",
+        label: label ? label.trim() : "Permanent Reusable Code",
+        expiresAt,
+        status: "consumable",
+        usageCount: 0,
+        maxUses: parseInt(maxUses) || 0,
+        requireApproval: permanentRequireApproval,
+      });
+
+      return res.json({
+        success: true,
+        message: `Permanent invitation code "${invite.code}" created successfully.`,
+        invite,
+        invites: [invite],
+      });
+    }
+
+    // Single-Use Code(s) Logic - Supports Multiple Comma-Separated Emails
+    const createdInvites = [];
+    const errors: string[] = [];
+
+    for (const cleanEmail of emailList) {
       try {
-        const template = generateEmail("invitation", {
-          code: invite.code,
-          link: `${process.env.FRONTEND_URL}/register?role=${assignedRole}&code=` + invite.code,
+        // Check if active verified approved user already exists
+        const existingUser = await UserModel.findOne({ email: cleanEmail });
+        if (existingUser && existingUser.isVerified && existingUser.applicationStatus === "approved") {
+          errors.push(`Account already exists and active for ${cleanEmail}`);
+          continue;
+        }
+
+        if (existingUser) {
+          // Clean up incomplete/unverified stub
+          await UserModel.deleteOne({ _id: existingUser._id });
+        }
+
+        // Delete stale single-use codes for this email
+        await InvitationCode.deleteMany({ email: cleanEmail, codeType: "single_use" });
+
+        // Generate unique code (or custom code if exactly 1 email with custom code)
+        let code: string;
+        if (emailList.length === 1 && customCode && typeof customCode === "string" && customCode.trim()) {
+          code = customCode.trim().toUpperCase();
+          const existing = await InvitationCode.findOne({ code });
+          if (existing) {
+            return res.status(400).json({
+              success: false,
+              message: `The invitation code "${code}" is already in use. Please choose another.`,
+            });
+          }
+        } else {
+          code = generateOtpCode();
+          let existing = await InvitationCode.findOne({ code });
+          while (existing) {
+            code = generateOtpCode();
+            existing = await InvitationCode.findOne({ code });
+          }
+        }
+
+        const invite = await InvitationCode.create({
+          code,
+          codeType: "single_use",
+          formId,
+          role: role || "member",
+          email: cleanEmail,
+          label: label ? label.trim() : `Individual Member Invite (${cleanEmail})`,
+          expiresAt,
+          status: "consumable",
+          usageCount: 0,
+          maxUses: 1,
+          requireApproval: false, // Individual invitations bypass admin approval!
         });
 
-        await sendEmail(cleanEmail, "Your MEC Computer Club Invitation Code", template);
-      } catch (mailErr) {
-        console.warn("Failed to dispatch invitation email:", mailErr);
+        createdInvites.push(invite);
+
+        // Send Email if requested
+        if (sendEmailNotification) {
+          try {
+            const assignedRole = invite.role || "member";
+            const template = generateEmail("invitation", {
+              code: invite.code,
+              link: `${process.env.FRONTEND_URL}/register?role=${assignedRole}&code=` + invite.code,
+            });
+            await sendEmail(cleanEmail, "Your MEC Computer Club Invitation Code", template);
+          } catch (mailErr) {
+            console.warn(`Failed to dispatch invitation email to ${cleanEmail}:`, mailErr);
+          }
+        }
+      } catch (itemErr: any) {
+        console.error(`Error issuing invite for ${cleanEmail}:`, itemErr);
+        errors.push(`Failed for ${cleanEmail}: ${itemErr?.message || "Internal error"}`);
       }
     }
 
+    if (createdInvites.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: errors.length > 0 ? errors.join("; ") : "No invitation codes could be generated.",
+      });
+    }
+
+    const message =
+      createdInvites.length === 1
+        ? `Invitation code generated and emailed to ${createdInvites[0].email} successfully.`
+        : `Successfully generated and dispatched ${createdInvites.length} invitation codes!${
+            errors.length > 0 ? ` (${errors.length} skipped)` : ""
+          }`;
+
     return res.json({
       success: true,
-      message: isPermanent
-        ? `Permanent invitation code "${invite.code}" created successfully.`
-        : `Invitation code generated and emailed to ${cleanEmail} successfully.`,
-      invite,
+      message,
+      invites: createdInvites,
+      invite: createdInvites[0],
     });
   } catch (err: any) {
     console.error("Create invitation error:", err);
@@ -195,6 +283,7 @@ export const getAllInvitationCodes = async (req: Request, res: Response) => {
 
       return {
         ...inv,
+        requireApproval: inv.requireApproval !== undefined ? inv.requireApproval : inv.codeType === "permanent",
         effectiveStatus: displayStatus,
         accountStatus,
         registeredName: user?.fullName || null,
@@ -491,6 +580,12 @@ export const verifyInvitationCode = async (req: Request, res: Response) => {
         status: invite.status,
         label: invite.label,
         usageCount: invite.usageCount,
+        requireApproval:
+          invite.codeType === "permanent"
+            ? invite.requireApproval !== undefined
+              ? invite.requireApproval
+              : true
+            : false,
       },
     });
   } catch (err) {

@@ -179,6 +179,22 @@ export const register = async (req: Request, res: Response) => {
       payload.clubRole = payload.clubRole || "member";
     }
 
+    // Determine if candidate requires admin approval:
+    // Single-use individual codes ALWAYS bypass admin approval (auto-approved upon email confirmation).
+    // Permanent universal codes check inviteDoc.requireApproval (defaults to true).
+    const requiresAdminApproval =
+      inviteDoc.codeType === "permanent"
+        ? inviteDoc.requireApproval !== undefined
+          ? Boolean(inviteDoc.requireApproval)
+          : true
+        : false;
+
+    if (!requiresAdminApproval) {
+      payload.applicationStatus = "approved";
+      payload.approvedAt = new Date();
+      payload.profileStatus = "active";
+    }
+
     // 4. Pre-upload Unique Account Check
     const exists = await User.findOne({
       $or: [{ email: payload.email.toLowerCase().trim() }, { studentId: payload.studentId }],
@@ -559,9 +575,15 @@ export const verifyEmailToken = async (req: Request, res: Response) => {
   try {
     const { email, token } = req.body;
     const user = await userService.verifyUserByToken(email, token);
+    const isApproved = user.applicationStatus === "approved";
     res.json({
-      message: "Email verified. Admin will review your application",
-      user: { id: user._id },
+      success: true,
+      message: isApproved
+        ? "Email verified successfully! Your account is activated and ready to sign in."
+        : "Email verified. Admin will review your application.",
+      isApproved,
+      applicationStatus: user.applicationStatus,
+      user: { id: user._id, email: user.email, applicationStatus: user.applicationStatus },
     });
   } catch (err: any) {
     res.status(400).json({ message: err.message });
@@ -572,9 +594,15 @@ export const verifyEmailCode = async (req: Request, res: Response) => {
   try {
     const { email, code } = req.body;
     const user = await userService.verifyUserByCode(email, code);
+    const isApproved = user.applicationStatus === "approved";
     res.json({
-      message: "Email verified (code). Admin will review your application",
-      user: { id: user._id },
+      success: true,
+      message: isApproved
+        ? "Email verified successfully! Your account is activated and ready to sign in."
+        : "Email verified. Admin will review your application.",
+      isApproved,
+      applicationStatus: user.applicationStatus,
+      user: { id: user._id, email: user.email, applicationStatus: user.applicationStatus },
     });
   } catch (err: any) {
     res.status(400).json({ message: err.message });
