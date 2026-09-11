@@ -111,3 +111,72 @@ export const viewPdf = async (req: Request, res: Response) => {
     res.status(500).json({ message: "Failed to load PDF", error: err.message });
   }
 };
+
+/**
+ * @desc Fetch/Proxy a remote image (e.g. from Facebook, Google, CDN) to bypass CORS
+ * @route GET /api/upload/proxy-image
+ */
+export const proxyImage = async (req: Request, res: Response) => {
+  try {
+    const rawUrl = (req.query.url as string) || "";
+    if (!rawUrl || (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://"))) {
+      return res.status(400).json({ message: "Valid image URL is required" });
+    }
+
+    const fetchWithRedirects = (urlStr: string, redirectsRemaining: number) => {
+      if (redirectsRemaining <= 0) {
+        return res.status(400).json({ message: "Too many redirects" });
+      }
+
+      const reqClient = urlStr.startsWith("https") ? https : http;
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(urlStr);
+      } catch {
+        return res.status(400).json({ message: "Invalid URL provided" });
+      }
+
+      const requestOptions = {
+        hostname: parsedUrl.hostname,
+        port: parsedUrl.port || (urlStr.startsWith("https") ? 443 : 80),
+        path: parsedUrl.pathname + parsedUrl.search,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+          "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+          "Referer": parsedUrl.origin,
+        },
+      };
+
+      const request = reqClient.get(requestOptions, (remoteRes) => {
+        if (
+          remoteRes.statusCode &&
+          [301, 302, 303, 307, 308].includes(remoteRes.statusCode) &&
+          remoteRes.headers.location
+        ) {
+          const redirectUrl = new URL(remoteRes.headers.location, urlStr).toString();
+          return fetchWithRedirects(redirectUrl, redirectsRemaining - 1);
+        }
+
+        if (remoteRes.statusCode && (remoteRes.statusCode < 200 || remoteRes.statusCode >= 300)) {
+          return res.status(remoteRes.statusCode || 500).json({ message: "Failed to fetch remote image" });
+        }
+
+        const contentType = remoteRes.headers["content-type"] || "image/jpeg";
+        res.setHeader("Content-Type", contentType);
+        res.setHeader("Cache-Control", "public, max-age=86400");
+        remoteRes.pipe(res);
+      });
+
+      request.on("error", (err) => {
+        console.error("Proxy image request error:", err);
+        res.status(500).json({ message: "Network error fetching remote image", error: err.message });
+      });
+    };
+
+    fetchWithRedirects(rawUrl, 4);
+  } catch (err: any) {
+    console.error("proxyImage error:", err);
+    res.status(500).json({ message: "Failed to load image", error: err.message });
+  }
+};
+
