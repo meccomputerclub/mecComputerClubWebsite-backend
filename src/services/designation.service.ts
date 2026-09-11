@@ -71,10 +71,10 @@ export const getDesignationsService = async (category?: string) => {
   const designations = await Designation.find(filter).sort({ order: 1, createdAt: 1 }).lean();
 
   // Attach currently assigned members count and list
-  const titles = designations.map((d) => d.title);
+  const titleRegexes = designations.map((d) => new RegExp(`^${d.title.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i"));
   const assignedUsers = await User.find({
     applicationStatus: "approved",
-    $or: [{ designation: { $in: titles } }, { customRole: { $in: titles } }],
+    $or: [{ designation: { $in: titleRegexes } }, { customRole: { $in: titleRegexes } }],
   })
     .select("_id fullName email imageUrl studentId department session designation customRole role clubRole")
     .lean();
@@ -211,9 +211,12 @@ export const assignMembersToDesignationService = async (
   memberIds: string[],
   defaultRole?: "admin" | "moderator" | "member"
 ) => {
+  const escapedTitle = designationTitle.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const titleRegex = new RegExp(`^${escapedTitle}$`, "i");
+
   // First, find all members currently having this designation
   const currentMembers = await User.find({
-    $or: [{ designation: designationTitle }, { customRole: designationTitle }],
+    $or: [{ designation: titleRegex }, { customRole: titleRegex }],
   }).select("_id");
 
   const currentIds = currentMembers.map((m) => m._id.toString());
@@ -227,6 +230,7 @@ export const assignMembersToDesignationService = async (
       {
         $set: {
           designation: "General Member",
+          customRole: "General Member",
           clubRole: "member",
         },
       }
@@ -237,6 +241,7 @@ export const assignMembersToDesignationService = async (
   if (newIds.length > 0) {
     const updatePayload: any = {
       designation: designationTitle,
+      customRole: designationTitle,
       clubRole: category === "advisor" ? "advisor" : "executive",
     };
 

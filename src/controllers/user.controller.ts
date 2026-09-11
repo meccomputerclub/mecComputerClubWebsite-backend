@@ -1209,6 +1209,49 @@ export const getPublicMembers = async (req: Request, res: Response, next: NextFu
   }
 };
 
+export const searchAssignableMembers = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const rawQuery = (req.query.q || req.query.search || "").toString().trim();
+    if (!rawQuery || rawQuery.length < 3) {
+      return res.status(200).json({
+        success: true,
+        message: "Search query must be at least 3 characters",
+        members: [],
+        data: [],
+      });
+    }
+
+    const escaped = rawQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const regex = new RegExp(escaped, "i");
+
+    const members = await User.find({
+      applicationStatus: "approved",
+      profileStatus: { $ne: "deleted" },
+      $or: [
+        { fullName: regex },
+        { email: regex },
+        { studentId: regex },
+        { department: regex },
+        { designation: regex },
+      ],
+    })
+      .select(
+        "_id fullName email studentId department session batch designation customRole clubRole role imageUrl imagePosition"
+      )
+      .limit(30)
+      .sort({ fullName: 1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      members,
+      data: members,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const adminCreateMember = async (req: Request, res: Response) => {
   try {
     if (!req.body.data) {

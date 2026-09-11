@@ -19,6 +19,8 @@ router.post("/password/reset", userCtrl.resetPassword);
 router.post("/change-password", userCtrl.changePassword);
 router.get("/profile/active", userCtrl.getPublicMembers);
 router.get("/public/members", userCtrl.getPublicMembers);
+router.get("/search-assignable", authMiddleware(["admin", "moderator", "executive"]), userCtrl.searchAssignableMembers);
+router.get("/all-members", authMiddleware(["admin", "moderator", "executive"]), userCtrl.searchAssignableMembers);
 router.get("/public/leaderboard", userCtrl.getLeaderboard);
 router.get("/leaderboard", userCtrl.getLeaderboard);
 router.get("/lookup/:identifier", userCtrl.getMemberActivityLookup);
