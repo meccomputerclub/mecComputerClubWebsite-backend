@@ -162,6 +162,42 @@ export const proxyImage = async (req: Request, res: Response) => {
         }
 
         const contentType = remoteRes.headers["content-type"] || "image/jpeg";
+
+        // If the URL is an HTML webpage (e.g. Facebook photo page link), extract og:image
+        if (contentType.includes("text/html")) {
+          let htmlData = "";
+          remoteRes.setEncoding("utf8");
+          remoteRes.on("data", (chunk) => {
+            if (htmlData.length < 131072) htmlData += chunk;
+          });
+          remoteRes.on("end", () => {
+            const ogMatch =
+              htmlData.match(
+                /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i
+              ) ||
+              htmlData.match(
+                /<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i
+              ) ||
+              htmlData.match(
+                /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i
+              ) ||
+              htmlData.match(/<img[^>]+src=["']([^"']+)["']/i);
+
+            if (ogMatch && ogMatch[1]) {
+              let extractedUrl = ogMatch[1].replace(/&amp;/g, "&");
+              if (extractedUrl.startsWith("/")) {
+                extractedUrl = new URL(extractedUrl, urlStr).toString();
+              }
+              return fetchWithRedirects(extractedUrl, redirectsRemaining - 1);
+            }
+
+            return res.status(400).json({
+              message: "Provided URL returned HTML without a detectable image",
+            });
+          });
+          return;
+        }
+
         res.setHeader("Content-Type", contentType);
         res.setHeader("Cache-Control", "public, max-age=86400");
         remoteRes.pipe(res);
