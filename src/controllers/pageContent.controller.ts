@@ -128,6 +128,61 @@ const DEFAULT_PAGE_CONTENTS: Record<string, any> = {
         "Department of CSE, Mymensingh Engineering College, Khagdahar, Mymensingh-2200",
     },
   },
+  about: {
+    hero: {
+      kicker: "About us",
+      title: "Hello World! Meet the Club",
+      description:
+        'MEC Computer Club exists to give students a structured path from "I\'m interested in CS" to "I\'ve shipped real projects, competed at ICPC, and have something concrete to show for it."',
+      subDescription:
+        "Founded in 2019, the club started as a small competitive programming group. Today, 70+ members work across specialized departments — Competitive Programming, Web Development, Machine Learning, and Cybersecurity. We run weekly practice sessions, build internal tools, host contests, and send teams to national and regional competitions.",
+    },
+    departments: {
+      sectionKicker: "Departments",
+      sectionTitle: "Your Core Functions & Tasks",
+      sectionDescription:
+        "Each department runs its own activities, projects, and learning tracks.",
+      memberCounts: {
+        cp: 24,
+        webdev: 18,
+        ml: 15,
+        cybersec: 12,
+        gaming: 20,
+      },
+    },
+    milestones: [
+      {
+        year: "2019",
+        title: "Founded",
+        description:
+          "Started as a CP study group with 12 members and a shared Google Sheet.",
+      },
+      {
+        year: "2020",
+        title: "First ICPC participation",
+        description:
+          "Sent our first team to ICPC Asia Dhaka Regional. Didn't place, but learned everything.",
+      },
+      {
+        year: "2022",
+        title: "Expanded to 4 departments",
+        description:
+          "Added Web Dev, ML/AI, and Cybersecurity panels. Membership grew to 40+.",
+      },
+      {
+        year: "2024",
+        title: "Built MEC Judge",
+        description:
+          "Launched our own online judge platform. 80+ students used it in the first contest.",
+      },
+      {
+        year: "2025",
+        title: "70+ members, 3 ICPC teams",
+        description:
+          "Largest year yet. Shipping projects, running workshops, and sending 3 teams to ICPC.",
+      },
+    ],
+  },
 };
 
 /**
