@@ -48,11 +48,12 @@ export const handleCreateEvent = async (req: Request, res: Response) => {
 
 export const handleGetEvents = async (req: Request, res: Response) => {
   try {
-    const { category, status } = req.query;
+    const { category, status, sort } = req.query;
     const filter: any = {};
     if (category) filter.category = category;
     if (status) filter.status = status;
-    const events = await EventService.getAllEvents(filter);
+    const sortOption = sort === "asc" ? { date: 1 } : { date: -1 };
+    const events = await EventService.getAllEvents(filter, sortOption);
     res.status(200).json({ success: true, count: events.length, data: events });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });

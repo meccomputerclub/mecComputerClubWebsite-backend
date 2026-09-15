@@ -183,6 +183,32 @@ const DEFAULT_PAGE_CONTENTS: Record<string, any> = {
       },
     ],
   },
+  sponsor: {
+    hero: {
+      kicker: "Corporate Sponsorship",
+      title: "Acquire Top Tech Talent",
+      description:
+        "150+ active members. Trusted by 15+ companies to deliver battle-tested engineering students before they hit the job market.",
+      deckButtonText: "Get the Pitch Deck",
+      tiersButtonText: "View Sponsorship Tiers",
+    },
+    stats: {
+      stat1Value: "150+",
+      stat1Label: "Active Members",
+      stat2Value: "20+",
+      stat2Label: "Yearly Events",
+      stat3Value: "500+",
+      stat3Label: "Participants",
+      stat4Value: "15+",
+      stat4Label: "Sponsors",
+    },
+    cta: {
+      cycleNotice: "Sponsorship cycle closes Nov 30",
+      title: "Ready to collaborate?",
+      emailButtonText: "Email Us",
+      callButtonText: "Call Us",
+    },
+  },
 };
 
 /**
