@@ -54,3 +54,23 @@ export const authMiddleware = (roles?: string[]) => {
     }
   };
 };
+
+export const optionalAuthMiddleware = async (req: Request, res: Response, next: NextFunction) => {
+  const authHeader = req.headers.authorization;
+  const bearerToken = authHeader && authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+  const token = req.cookies?.auth_token || bearerToken;
+  if (!token) {
+    return next();
+  }
+  try {
+    const payload = jwt.verify(token, JWT_SECRET) as any;
+    const user = await UserModel.findById(payload.id).select("role fullName");
+    if (user) {
+      (req as any).user = { id: payload.id, role: user.role, fullName: user.fullName };
+    }
+  } catch {
+    // Silently proceed for unauthenticated requests
+  }
+  next();
+};
+

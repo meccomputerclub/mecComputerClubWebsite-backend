@@ -18,9 +18,12 @@ import projectRoutes from "./routes/project.routes";
 import customPageRoutes from "./routes/customPage.routes";
 import designationRoutes from "./routes/designation.routes";
 import pageContentRoutes from "./routes/pageContent.routes";
+import courseRoutes from "./routes/course.routes";
+import instructorRoutes from "./routes/instructor.routes";
 
 import certificateTemplateRoutes from "./routes/certificateTemplate.routes";
 import notificationRoutes from "./routes/notification.routes";
+import emailRoutingRoutes from "./routes/emailRouting.routes";
 import { getGalleryMedia } from "./controllers/event.controller";
 
 // Ensure all models are registered with Mongoose before any route handler runs
@@ -31,6 +34,8 @@ import "./models/Certificate.model";
 import "./models/Sponsor.model";
 import "./models/Project.model";
 import "./models/Blog.model";
+import "./models/Course.model";
+import "./models/Instructor.model";
 import cors, { CorsOptions } from "cors";
 import globalErrorHandler from "./middlewares/errorMiddleware";
 import swaggerUi from "swagger-ui-express";
@@ -129,6 +134,9 @@ app.use("/api/custom-pages", customPageRoutes);
 app.use("/api/designations", designationRoutes);
 app.use("/api/page-content", pageContentRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/courses", courseRoutes);
+app.use("/api/instructors", instructorRoutes);
+app.use("/api/email-routing", emailRoutingRoutes);
 
 app.get("/", (req, res) => {
   res.send("Welcome to the API! Visit /api/docs for documentation.");

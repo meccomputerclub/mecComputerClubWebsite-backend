@@ -13,7 +13,7 @@ export type NotificationPriority = "normal" | "high" | "urgent";
 
 export interface INotification extends Document {
   recipient?: Types.ObjectId | null; // specific user ID or null for role/broadcast
-  recipientRole?: "all" | "admin" | "moderator" | "executive" | "member"; // for role-based broadcast
+  recipientRole?: "all" | "admin" | "moderator" | "executive" | "member" | "current_members"; // for role-based broadcast
   type: NotificationType;
   title: string;
   message: string;
@@ -42,7 +42,7 @@ const NotificationSchema = new Schema<INotification>(
     },
     recipientRole: {
       type: String,
-      enum: ["all", "admin", "moderator", "executive", "member"],
+      enum: ["all", "admin", "moderator", "executive", "member", "current_members"],
       default: null,
       index: true,
     },

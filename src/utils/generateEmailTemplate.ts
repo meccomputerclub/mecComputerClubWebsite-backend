@@ -7,6 +7,7 @@ export type EmailType =
   | "emailVerification"
   | "status"
   | "adminMailForMemberRegistration"
+  | "adminMailForContactMessage"
   | "loginSecurityCode"
   | "deviceBlocked";
 
@@ -31,6 +32,10 @@ interface EmailData {
   deviceInfo?: string;
   ipAddress?: string;
   remainingAttempts?: number;
+  senderName?: string;
+  senderEmail?: string;
+  subject?: string;
+  message?: string;
 }
 
 function getStyle() {
@@ -1121,6 +1126,121 @@ export function generateEmail(type: EmailType, data: EmailData) {
                           <td align="center" style="padding-bottom: 24px; color: #ffffff">
                             <a href="${data.link}" target="_blank" class="btn-primary">
                               Secure Account & Reset Password
+                            </a>
+                          </td>
+                        </tr>
+                      </table>
+                      `
+                          : ""
+                      }
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            ${getFooter()}
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+`;
+
+    case "adminMailForContactMessage":
+      return `
+      <!DOCTYPE html>
+<html
+  lang="en"
+  xmlns:v="urn:schemas-microsoft-com:vml"
+  xmlns:o="urn:schemas-microsoft-com:office:office"
+>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <title>New Contact Form Inquiry - MEC Computer Club</title>
+
+    ${getStyle()}
+  </head>
+
+  <body>
+    <div class="preheader">
+      New contact message received from ${data.senderName || "Visitor"} (${data.senderEmail || ""}).
+    </div>
+
+    <table border="0" cellpadding="0" cellspacing="0" class="main-wrapper">
+      <tr>
+        <td align="center" class="main-cell">
+          <table border="0" cellpadding="0" cellspacing="0" class="card-container">
+            <tr>
+              <td align="center" class="card">
+                ${getHeader()}
+
+                <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                  <tr>
+                    <td class="content-padding">
+                      <h1 class="header-text">New Contact Message</h1>
+
+                      <p class="body-text">
+                        <strong>Hi Admin,</strong> <br>
+                        A new inquiry has been submitted through the MEC Computer Club contact form. Details are below:
+                      </p>
+
+                      <div
+                        style="
+                          font-family: Arial, sans-serif;
+                          max-width: 480px;
+                          margin: 20px auto;
+                          border: 1px solid #e0e0e0;
+                          border-radius: 12px;
+                          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+                          background-color: #ffffff;
+                          overflow: hidden;
+                        "
+                      >
+                        <div
+                          style="
+                            background-color: #004d99;
+                            color: white;
+                            padding: 14px 20px;
+                            text-align: left;
+                            border-top-left-radius: 12px;
+                            border-top-right-radius: 12px;
+                          "
+                        >
+                          <p style="margin: 0; font-size: 16px; font-weight: bold">Inquiry Details</p>
+                        </div>
+
+                        <div style="padding: 18px 20px; text-align: left;">
+                          <p style="margin: 0 0 10px; font-size: 14px; color: #555;">
+                            <strong style="color: #222;">From:</strong> ${data.senderName || "Unknown"}
+                          </p>
+                          <p style="margin: 0 0 10px; font-size: 14px; color: #555;">
+                            <strong style="color: #222;">Email:</strong>
+                            <a href="mailto:${data.senderEmail}" style="color: #004d99; text-decoration: none;">
+                              ${data.senderEmail || "N/A"}
+                            </a>
+                          </p>
+                          <p style="margin: 0 0 12px; font-size: 14px; color: #555;">
+                            <strong style="color: #222;">Subject:</strong> ${data.subject || "No Subject"}
+                          </p>
+                          <div style="margin-top: 14px; padding: 12px; background-color: #f8fafc; border-left: 4px solid #004d99; border-radius: 4px;">
+                            <strong style="display: block; font-size: 13px; color: #333; margin-bottom: 6px;">Message:</strong>
+                            <p style="margin: 0; font-size: 14px; color: #444; white-space: pre-wrap; line-height: 1.5;">${data.message || ""}</p>
+                          </div>
+                        </div>
+                      </div>
+
+                      ${
+                        data.link
+                          ? `
+                      <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                        <tr>
+                          <td align="center" style="padding-bottom: 24px; padding-top: 10px;">
+                            <a href="${data.link}" target="_blank" class="btn-primary">
+                              View in Admin Dashboard
                             </a>
                           </td>
                         </tr>

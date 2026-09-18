@@ -6,6 +6,7 @@ import { generateEmail } from "../utils/generateEmailTemplate";
 import { generateOtpCode } from "../utils/generateInviteCode";
 import InvitationCodeModel from "../models/InvitationCode.model";
 import AppError from "../utils/AppError";
+import { getRegistrationApprovalEmailRecipients } from "../controllers/emailRouting.controller";
 
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 
@@ -153,8 +154,32 @@ export const verifyUserByToken = async (email: string, token: string) => {
   user.verificationTokenExpiry = undefined;
   await user.save();
 
-  // Notify admins via email that a new verified user applied - implement as needed
-  // e.g., sendEmail(adminEmail, "New member needs approval", ...)
+  // Notify admins via email ONLY if user requires approval
+  if (user.applicationStatus !== "approved") {
+    try {
+      const recipients = await getRegistrationApprovalEmailRecipients();
+      if (recipients.length > 0) {
+        const emailTemplate = generateEmail("adminMailForMemberRegistration", {
+          userName: user.fullName,
+          email: user.email,
+          contactNumber: user.contactNumber || "N/A",
+          session: user.session,
+          department: user.department,
+          batch: user.batch,
+          studentId: user.studentId,
+          link: `${FRONTEND_URL}/dashboard/member-approvals/${user._id}`,
+          userImageUrl: user.imageUrl,
+        });
+        await sendEmail(
+          recipients.join(", "),
+          "New member needs approval - MEC CC",
+          emailTemplate
+        );
+      }
+    } catch (mailErr) {
+      console.error("Failed to notify admins of new member application:", mailErr);
+    }
+  }
 
   return user;
 };
@@ -171,26 +196,33 @@ export const verifyUserByCode = async (email: string, code: string) => {
   user.verificationCode = undefined;
   user.verificationToken = undefined;
   user.verificationTokenExpiry = undefined;
-  // await user.save();
 
-  // Notify admins via email that a new verified user applied
-  // e.g., sendEmail(adminEmail, "New member needs approval", ...)
-  const emailTemplate = generateEmail("adminMailForMemberRegistration", {
-    userName: user.fullName,
-    email: user.email,
-    contactNumber: user.contactNumber || "N/A",
-    session: user.session,
-    department: user.department,
-    batch: user.batch,
-    studentId: user.studentId,
-    link: `${FRONTEND_URL}/dashboard/member-approvals/${user._id}`,
-    userImageUrl: user.imageUrl,
-  });
-  await sendEmail(
-    "nasir2242001@gmail.com, mdshazid121@gmail.com",
-    "New member needs approval",
-    emailTemplate
-  );
+  // Notify admins via email ONLY if user requires approval
+  if (user.applicationStatus !== "approved") {
+    try {
+      const recipients = await getRegistrationApprovalEmailRecipients();
+      if (recipients.length > 0) {
+        const emailTemplate = generateEmail("adminMailForMemberRegistration", {
+          userName: user.fullName,
+          email: user.email,
+          contactNumber: user.contactNumber || "N/A",
+          session: user.session,
+          department: user.department,
+          batch: user.batch,
+          studentId: user.studentId,
+          link: `${FRONTEND_URL}/dashboard/member-approvals/${user._id}`,
+          userImageUrl: user.imageUrl,
+        });
+        await sendEmail(
+          recipients.join(", "),
+          "New member needs approval - MEC CC",
+          emailTemplate
+        );
+      }
+    } catch (mailErr) {
+      console.error("Failed to notify admins of new member application:", mailErr);
+    }
+  }
 
   await user.save();
   return user;

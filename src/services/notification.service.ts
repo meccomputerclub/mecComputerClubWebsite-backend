@@ -5,10 +5,11 @@ import {
   NotificationType,
   NotificationPriority,
 } from "../models/Notification.model";
+import User from "../models/User.model";
 
 export interface CreateNotificationParams {
   recipient?: string | Types.ObjectId | null;
-  recipientRole?: "all" | "admin" | "moderator" | "executive" | "member";
+  recipientRole?: "all" | "admin" | "moderator" | "executive" | "member" | "current_members";
   type: NotificationType;
   title: string;
   message: string;
@@ -53,6 +54,52 @@ export const createBroadcastNotification = async (
 };
 
 /**
+ * Helper to compute matching broadcast roles for a user.
+ * Supports "all", role-specific ("admin", "moderator", "executive", "member"),
+ * and "current_members" (executives and active current members; excluding alumni, advisors, graduated members).
+ */
+export const getMatchingRolesForUser = async (
+  userId: string | Types.ObjectId,
+  userRole?: string
+): Promise<string[]> => {
+  const matchingRoles: string[] = ["all"];
+  if (userRole) {
+    matchingRoles.push(userRole);
+    if (userRole === "admin" || userRole === "moderator") {
+      matchingRoles.push("executive");
+    }
+  }
+
+  try {
+    const userDoc = await User.findById(userId)
+      .select("role clubRole isGraduated")
+      .lean();
+
+    if (userDoc) {
+      const isExec =
+        ["admin", "moderator", "executive"].includes(userDoc.role) ||
+        userDoc.clubRole === "executive";
+      const isAlumniOrAdvisor =
+        userDoc.role === "alumni" ||
+        userDoc.clubRole === "alumni" ||
+        userDoc.clubRole === "advisor" ||
+        userDoc.isGraduated === true;
+      const isCurrentMember =
+        !isAlumniOrAdvisor &&
+        (userDoc.clubRole === "member" || userDoc.role === "member");
+
+      if (isExec || isCurrentMember) {
+        matchingRoles.push("current_members");
+      }
+    }
+  } catch (err) {
+    console.error("Error evaluating matching roles for user:", err);
+  }
+
+  return matchingRoles;
+};
+
+/**
  * Fetch notifications tailored to a specific authenticated user.
  */
 export const getUserNotifications = async (
@@ -70,13 +117,7 @@ export const getUserNotifications = async (
   const skip = (page - 1) * limit;
 
   // Derive roles matching this user
-  const matchingRoles: string[] = ["all"];
-  if (userRole) {
-    matchingRoles.push(userRole);
-    if (userRole === "admin" || userRole === "moderator") {
-      matchingRoles.push("executive");
-    }
-  }
+  const matchingRoles = await getMatchingRolesForUser(userObjectId, userRole);
 
   // Base query: either sent to this user directly OR broadcast to their matching roles,
   // excluding anything dismissed by this user.
@@ -206,13 +247,7 @@ export const markAllNotificationsAsRead = async (
   );
 
   // 2. Add userId to readBy for broadcast notifications matching user's role
-  const matchingRoles: string[] = ["all"];
-  if (userRole) {
-    matchingRoles.push(userRole);
-    if (userRole === "admin" || userRole === "moderator") {
-      matchingRoles.push("executive");
-    }
-  }
+  const matchingRoles = await getMatchingRolesForUser(userObjectId, userRole);
 
   await Notification.updateMany(
     {
@@ -257,13 +292,7 @@ export const clearAllNotifications = async (
 ) => {
   const userObjectId = new mongoose.Types.ObjectId(userId);
 
-  const matchingRoles: string[] = ["all"];
-  if (userRole) {
-    matchingRoles.push(userRole);
-    if (userRole === "admin" || userRole === "moderator") {
-      matchingRoles.push("executive");
-    }
-  }
+  const matchingRoles = await getMatchingRolesForUser(userObjectId, userRole);
 
   await Notification.updateMany(
     {

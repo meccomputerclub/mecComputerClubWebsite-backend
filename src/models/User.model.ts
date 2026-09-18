@@ -92,6 +92,7 @@ export interface IUser extends Document {
   // Grouped security & session protection
   security: {
     failedAttempts: number;
+    lastFailedAttemptAt?: Date | null;
     lockUntil?: Date | null;
     loginCode?: string | null;
     loginCodeExpiry?: Date | null;
@@ -224,6 +225,7 @@ const userSchema: Schema<IUser> = new Schema(
     // Grouped security & session protection
     security: {
       failedAttempts: { type: Number, default: 0 },
+      lastFailedAttemptAt: { type: Date, default: null },
       lockUntil: { type: Date, default: null },
       loginCode: { type: String, default: null },
       loginCodeExpiry: { type: Date, default: null },

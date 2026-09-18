@@ -26,9 +26,9 @@ export const handleCreateEvent = async (req: Request, res: Response) => {
       await FormModel.findByIdAndUpdate(event.linkedForm, { eventId: event._id });
     }
 
-    // Broadcast in-app notification about new event
+    // Broadcast in-app notification about new event (executives & current members only, excluding alumni/advisors)
     createBroadcastNotification({
-      recipientRole: "all",
+      recipientRole: "current_members",
       type: "event",
       title: `New Event: ${event.title}`,
       message: event.description

@@ -2,7 +2,11 @@ import { Request, Response, NextFunction } from "express";
 import ContactMessage from "../models/ContactMessage.model";
 import User from "../models/User.model";
 import { sendEmail } from "../utils/sendEmail";
+import { generateEmail } from "../utils/generateEmailTemplate";
 import { createNotification } from "../services/notification.service";
+import { getContactMessageEmailRecipients } from "./emailRouting.controller";
+
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 
 /**
  * @desc  Submit a contact message (public)
@@ -41,6 +45,28 @@ export const createContactMessage = async (req: Request, res: Response, next: Ne
       }
     } catch (notifErr) {
       console.error("Failed to dispatch contact message notifications:", notifErr);
+    }
+
+    // Dispatch email notifications to configured recipients
+    try {
+      const emailRecipients = await getContactMessageEmailRecipients();
+      if (emailRecipients.length > 0) {
+        const emailHtml = generateEmail("adminMailForContactMessage", {
+          senderName,
+          senderEmail,
+          subject,
+          message: body,
+          link: `${FRONTEND_URL}/dashboard/messages?id=${message._id}`,
+        });
+
+        await sendEmail(
+          emailRecipients.join(", "),
+          `New Contact Inquiry: ${subject} - MEC CC`,
+          emailHtml
+        );
+      }
+    } catch (mailErr) {
+      console.error("Failed to dispatch contact message email notification:", mailErr);
     }
 
     res.status(201).json({

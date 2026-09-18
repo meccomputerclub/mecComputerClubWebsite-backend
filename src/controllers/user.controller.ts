@@ -230,17 +230,19 @@ export const register = async (req: Request, res: Response) => {
     res.clearCookie("invitation_code", { path: "/" });
     res.clearCookie("invitation_validated", { path: "/" });
 
-    // Notify executive board about new registration application
-    createBroadcastNotification({
-      recipientRole: "executive",
-      type: "approval",
-      title: "New Member Application",
-      message: `${user.fullName || "A new student"} submitted an application for club membership.`,
-      link: "/dashboard/members",
-      actionLabel: "Review Application",
-      priority: "high",
-      metadata: { applicantId: user._id },
-    }).catch((err) => console.error("Notification creation error:", err));
+    // Notify executive board about new registration application ONLY if application is not auto-approved
+    if (user.applicationStatus !== "approved") {
+      createBroadcastNotification({
+        recipientRole: "executive",
+        type: "approval",
+        title: "New Member Application",
+        message: `${user.fullName || "A new student"} submitted an application for club membership.`,
+        link: "/dashboard/members",
+        actionLabel: "Review Application",
+        priority: "high",
+        metadata: { applicantId: user._id },
+      }).catch((err) => console.error("Notification creation error:", err));
+    }
 
     // 10. Success Response
     return res.status(201).json({
@@ -316,6 +318,29 @@ export const login = async (req: Request, res: Response) => {
     }
 
     const now = new Date();
+
+    // 1. If lockout duration has elapsed, automatically lift the lockout and reset failed attempts
+    if (user.security.lockUntil && user.security.lockUntil <= now) {
+      user.security.lockUntil = null;
+      user.security.failedAttempts = 0;
+      user.security.lastFailedAttemptAt = null;
+      user.security.loginCode = null;
+      user.security.loginCodeExpiry = null;
+      user.security.codeSentAt = null;
+      await user.save();
+    }
+
+    // 2. Sliding window: If the last failed attempt occurred more than 30 minutes ago,
+    // reset failedAttempts counter so stale attempts from hours or days ago do not accumulate.
+    if (
+      !user.security.lockUntil &&
+      user.security.lastFailedAttemptAt &&
+      now.getTime() - new Date(user.security.lastFailedAttemptAt).getTime() > 30 * 60 * 1000
+    ) {
+      user.security.failedAttempts = 0;
+      user.security.lastFailedAttemptAt = null;
+    }
+
     const isLocked = Boolean(user.security.lockUntil && user.security.lockUntil > now);
     const remainingLockMinutes = isLocked && user.security.lockUntil ? Math.max(1, Math.ceil((user.security.lockUntil.getTime() - now.getTime()) / 60000)) : 0;
 
@@ -387,6 +412,9 @@ export const login = async (req: Request, res: Response) => {
         });
       }
 
+      // Update last failed attempt timestamp
+      user.security.lastFailedAttemptAt = now;
+
       // Increment account failed attempts
       user.security.failedAttempts = (user.security.failedAttempts || 0) + 1;
 
@@ -433,6 +461,7 @@ export const login = async (req: Request, res: Response) => {
 
     // Credentials matched! Reset failed attempts and lockout state
     user.security.failedAttempts = 0;
+    user.security.lastFailedAttemptAt = null;
     user.security.lockUntil = null;
     user.security.loginCode = null;
     user.security.loginCodeExpiry = null;
